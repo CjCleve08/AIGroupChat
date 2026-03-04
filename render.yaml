@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-group-chat
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_SITE_URL
+        sync: false
+      - key: OPENROUTER_SITE_NAME
+        value: AI Group Chat
