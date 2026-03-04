@@ -33,7 +33,14 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/groups", (_req, res) => {
-  const payload = Array.from(groups.values()).map(toGroupSummary);
+  const username = String(_req.query.username || "").trim();
+  if (!username) return res.json([]);
+
+  const payload = Array.from(groups.values())
+    .filter((group) => {
+      return group.members.has(username);
+    })
+    .map(toGroupSummary);
   res.json(payload);
 });
 
@@ -68,6 +75,28 @@ app.post("/api/groups/:groupId/join", (req, res) => {
   if (!username) return res.status(400).json({ error: "username is required" });
   group.members.add(username);
   res.json(toGroupSummary(group));
+});
+
+app.post("/api/groups/:groupId/leave", (req, res) => {
+  const group = groups.get(req.params.groupId);
+  if (!group) return res.status(404).json({ error: "group not found" });
+
+  const username = String(req.body?.username || "").trim();
+  if (!username) return res.status(400).json({ error: "username is required" });
+  if (!group.members.has(username)) return res.status(400).json({ error: "not in group" });
+
+  group.members.delete(username);
+
+  if (!group.members.size) {
+    groups.delete(group.id);
+    return res.json({ removed: true, groupDeleted: true });
+  }
+
+  if (group.ownerName === username) {
+    group.ownerName = Array.from(group.members).sort()[0];
+  }
+
+  return res.json({ removed: true, groupDeleted: false, group: toGroupSummary(group) });
 });
 
 app.get("/api/groups/:groupId/messages", (req, res) => {

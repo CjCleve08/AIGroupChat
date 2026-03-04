@@ -5,8 +5,6 @@ const ui = {
   saveNameBtn: document.getElementById("saveNameBtn"),
   createGroupForm: document.getElementById("createGroupForm"),
   groupNameInput: document.getElementById("groupNameInput"),
-  joinGroupForm: document.getElementById("joinGroupForm"),
-  joinGroupIdInput: document.getElementById("joinGroupIdInput"),
   groupList: document.getElementById("groupList"),
   activeGroupTitle: document.getElementById("activeGroupTitle"),
   activeGroupSubtext: document.getElementById("activeGroupSubtext"),
@@ -20,14 +18,20 @@ const ui = {
   aiModelInput: document.getElementById("aiModelInput"),
   aiTemperatureInput: document.getElementById("aiTemperatureInput"),
   aiDelayInput: document.getElementById("aiDelayInput"),
-  aiMemberList: document.getElementById("aiMemberList")
+  aiMemberList: document.getElementById("aiMemberList"),
+  profileName: document.getElementById("profileName"),
+  searchInput: document.getElementById("searchInput"),
+  copyInviteBtn: document.getElementById("copyInviteBtn"),
+  leaveGroupBtn: document.getElementById("leaveGroupBtn")
 };
 
 let currentUsername = localStorage.getItem("aigc_username") || "";
 let activeGroupId = null;
+let activeGroupName = "";
+let inviteGroupId = new URLSearchParams(window.location.search).get("group") || "";
 ui.usernameInput.value = currentUsername;
 refreshUiForName();
-loadGroups();
+loadGroups(inviteGroupId || undefined);
 
 ui.saveNameBtn.addEventListener("click", () => {
   const newName = ui.usernameInput.value.trim();
@@ -38,7 +42,14 @@ ui.saveNameBtn.addEventListener("click", () => {
   currentUsername = newName.slice(0, 32);
   localStorage.setItem("aigc_username", currentUsername);
   refreshUiForName();
-  if (activeGroupId) joinActiveGroupIfNeeded();
+  if (ui.profileName) ui.profileName.textContent = currentUsername;
+  if (activeGroupId) {
+    joinActiveGroupIfNeeded();
+  } else if (inviteGroupId) {
+    joinGroupFromInvite(inviteGroupId).catch((error) => {
+      window.alert(error.message || "Unable to join invite link.");
+    });
+  }
 });
 
 ui.createGroupForm.addEventListener("submit", async (event) => {
@@ -52,19 +63,6 @@ ui.createGroupForm.addEventListener("submit", async (event) => {
   });
   ui.groupNameInput.value = "";
   await loadGroups(group.id);
-});
-
-ui.joinGroupForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!ensureName()) return;
-  const groupId = ui.joinGroupIdInput.value.trim();
-  if (!groupId) return;
-  await api(`/api/groups/${encodeURIComponent(groupId)}/join`, {
-    method: "POST",
-    body: JSON.stringify({ username: currentUsername })
-  });
-  ui.joinGroupIdInput.value = "";
-  await loadGroups(groupId);
 });
 
 ui.messageForm.addEventListener("submit", async (event) => {
@@ -106,6 +104,41 @@ ui.addAiForm.addEventListener("submit", async (event) => {
   await loadAiMembers(activeGroupId);
 });
 
+ui.copyInviteBtn?.addEventListener("click", async () => {
+  if (!activeGroupId) return;
+  const inviteUrl = `${window.location.origin}/?group=${encodeURIComponent(activeGroupId)}`;
+  try {
+    await navigator.clipboard.writeText(inviteUrl);
+    ui.copyInviteBtn.textContent = "Copied";
+    setTimeout(() => {
+      ui.copyInviteBtn.textContent = "Copy Invite Link";
+    }, 1200);
+  } catch (_error) {
+    window.prompt("Copy this invite link:", inviteUrl);
+  }
+});
+
+ui.leaveGroupBtn?.addEventListener("click", async () => {
+  if (!ensureName() || !activeGroupId) return;
+  const confirmed = window.confirm(`Leave "${activeGroupName}"?`);
+  if (!confirmed) return;
+
+  await api(`/api/groups/${encodeURIComponent(activeGroupId)}/leave`, {
+    method: "POST",
+    body: JSON.stringify({ username: currentUsername })
+  });
+
+  socket.emit("group:leave-room", activeGroupId);
+  activeGroupId = null;
+  activeGroupName = "";
+  ui.messageList.innerHTML = "";
+  ui.aiMemberList.innerHTML = "";
+  ui.activeGroupTitle.textContent = "Select a conversation";
+  ui.activeGroupSubtext.textContent = "Choose a group to start chatting";
+  refreshUiForName();
+  await loadGroups();
+});
+
 socket.on("message:new", (payload) => {
   if (!activeGroupId) return;
   if (!payload || payload.groupId !== activeGroupId) return;
@@ -113,14 +146,17 @@ socket.on("message:new", (payload) => {
 });
 
 async function loadGroups(preferredGroupId) {
-  const groups = await api("/api/groups");
+  const query = currentUsername ? `?username=${encodeURIComponent(currentUsername)}` : "";
+  const groups = await api(`/api/groups${query}`);
+  const search = String(ui.searchInput?.value || "").trim().toLowerCase();
+  const visibleGroups = groups.filter((g) => g.name.toLowerCase().includes(search));
   ui.groupList.innerHTML = "";
-  for (const group of groups) {
+  for (const group of visibleGroups) {
     const li = document.createElement("li");
     li.classList.toggle("active", group.id === activeGroupId);
     li.innerHTML = `
-      <strong>${escapeHtml(group.name)}</strong>
-      <span class="subline">${escapeHtml(group.id)} | ${group.memberCount} members | ${group.aiCount} AI</span>
+      <div class="title">${escapeHtml(group.name)}</div>
+      <span class="subline">${group.memberCount} members | ${group.aiCount} AI</span>
     `;
     li.addEventListener("click", () => selectGroup(group));
     ui.groupList.appendChild(li);
@@ -133,16 +169,19 @@ async function loadGroups(preferredGroupId) {
       return;
     }
   }
-  if (!activeGroupId && groups[0]) await selectGroup(groups[0]);
+  if (!activeGroupId && visibleGroups[0]) await selectGroup(visibleGroups[0]);
 }
 
 async function selectGroup(group) {
   const previousGroupId = activeGroupId;
   activeGroupId = group.id;
+  activeGroupName = group.name;
   ui.activeGroupTitle.textContent = group.name;
-  ui.activeGroupSubtext.textContent = `Group ID: ${group.id}`;
+  ui.activeGroupSubtext.textContent = `${group.memberCount} members | ${group.aiCount} AI`;
   ui.messageForm.classList.remove("hidden");
   ui.addAiBtn.disabled = false;
+  if (ui.copyInviteBtn) ui.copyInviteBtn.disabled = false;
+  if (ui.leaveGroupBtn) ui.leaveGroupBtn.disabled = false;
 
   if (previousGroupId && previousGroupId !== group.id) {
     socket.emit("group:leave-room", previousGroupId);
@@ -166,6 +205,19 @@ async function joinActiveGroupIfNeeded() {
   }
 }
 
+async function joinGroupFromInvite(groupId) {
+  if (!ensureName()) return;
+  await api(`/api/groups/${encodeURIComponent(groupId)}/join`, {
+    method: "POST",
+    body: JSON.stringify({ username: currentUsername })
+  });
+  inviteGroupId = "";
+  const url = new URL(window.location.href);
+  url.searchParams.delete("group");
+  window.history.replaceState({}, "", url.toString());
+  await loadGroups(groupId);
+}
+
 async function loadMessages(groupId) {
   const messages = await api(`/api/groups/${encodeURIComponent(groupId)}/messages`);
   ui.messageList.innerHTML = "";
@@ -183,16 +235,31 @@ async function loadAiMembers(groupId) {
 }
 
 function appendMessage(message) {
+  const isMe =
+    message.senderType === "human" &&
+    currentUsername &&
+    message.senderName?.toLowerCase() === currentUsername.toLowerCase();
+  const initials = String(message.senderName || "?")
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
   const row = document.createElement("div");
-  row.className = "message";
+  row.className = `message ${isMe ? "me" : ""}`;
   const created = new Date(message.createdAt);
   const time = Number.isNaN(created.getTime()) ? "" : created.toLocaleTimeString();
+  const aiBadge = message.senderType === "ai" ? `<span class="badge-ai">AI</span>` : "";
   row.innerHTML = `
-    <div class="meta">
-      <span>${escapeHtml(message.senderName)} (${escapeHtml(message.senderType)})</span>
-      <span>${escapeHtml(time)}</span>
+    ${isMe ? "" : `<div class="message-avatar ${message.senderType === "ai" ? "ai" : ""}">${escapeHtml(initials)}</div>`}
+    <div class="message-body">
+      <div class="meta">
+        <span class="sender">${escapeHtml(message.senderName)}</span>
+        ${aiBadge}
+        <span>${escapeHtml(time)}</span>
+      </div>
+      <div class="bubble ${message.senderType === "ai" ? "ai" : "human"}">${escapeHtml(message.text || "")}</div>
     </div>
-    <div>${escapeHtml(message.text || "")}</div>
   `;
   ui.messageList.appendChild(row);
   ui.messageList.scrollTop = ui.messageList.scrollHeight;
@@ -203,6 +270,9 @@ function refreshUiForName() {
   ui.saveNameBtn.textContent = hasName ? "Update" : "Save";
   ui.messageForm.classList.toggle("hidden", !hasName || !activeGroupId);
   ui.addAiBtn.disabled = !hasName || !activeGroupId;
+  if (ui.copyInviteBtn) ui.copyInviteBtn.disabled = !hasName || !activeGroupId;
+  if (ui.leaveGroupBtn) ui.leaveGroupBtn.disabled = !hasName || !activeGroupId;
+  if (ui.profileName && hasName) ui.profileName.textContent = currentUsername;
 }
 
 function ensureName() {
@@ -229,6 +299,16 @@ async function api(url, options = {}) {
   }
 
   return response.json();
+}
+
+if (ui.searchInput) {
+  ui.searchInput.addEventListener("input", () => {
+    loadGroups(activeGroupId).catch(() => {});
+  });
+}
+
+if (inviteGroupId && currentUsername) {
+  joinGroupFromInvite(inviteGroupId).catch(() => {});
 }
 
 function escapeHtml(input) {

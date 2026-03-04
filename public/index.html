@@ -4,51 +4,91 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Group Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <h1>AI Group Chat</h1>
-      <div id="sessionArea" class="session-area">
-        <input id="usernameInput" type="text" placeholder="Your name" maxlength="32" />
-        <button id="saveNameBtn">Save</button>
-      </div>
-    </header>
+    <div class="app-shell">
+      <div class="ambient ambient-left"></div>
+      <div class="ambient ambient-right"></div>
+      <div class="ambient ambient-center"></div>
 
-    <main class="layout">
-      <aside class="panel sidebar">
-        <h2>Your Groups</h2>
-        <form id="createGroupForm">
-          <input id="groupNameInput" type="text" placeholder="New group name" required />
-          <button type="submit">Create</button>
-        </form>
-        <form id="joinGroupForm">
-          <input id="joinGroupIdInput" type="text" placeholder="Join by Group ID" required />
-          <button type="submit">Join Group</button>
-        </form>
-        <ul id="groupList"></ul>
-      </aside>
-
-      <section class="panel chat">
-        <div class="chat-header">
-          <h2 id="activeGroupTitle">Select a group</h2>
-          <p id="activeGroupSubtext">No group selected</p>
+      <aside class="sidebar left-sidebar">
+        <div class="panel-header">
+          <div class="brand">
+            <div class="logo">✦</div>
+            <div>
+              <h1>AI Chats</h1>
+              <p>with friends & AI</p>
+            </div>
+          </div>
         </div>
 
-        <div id="messageList" class="messages"></div>
+        <div class="session-area">
+          <input id="usernameInput" type="text" placeholder="Your name" maxlength="32" />
+          <button id="saveNameBtn" class="btn-secondary" type="button">Save</button>
+        </div>
 
-        <form id="messageForm" class="message-form hidden">
+        <div class="search-wrap">
+          <input id="searchInput" type="text" placeholder="Search conversations..." />
+        </div>
+
+        <form id="createGroupForm" class="inline-form">
+          <input id="groupNameInput" type="text" placeholder="New group name" required />
+          <button class="btn-primary" type="submit">Create Group</button>
+        </form>
+
+        <ul id="groupList" class="group-list"></ul>
+
+        <div class="profile-card">
+          <div class="avatar">ME</div>
+          <div>
+            <p id="profileName">You</p>
+            <span>Online</span>
+          </div>
+        </div>
+      </aside>
+
+      <section class="chat-area">
+        <div class="chat-header glass-card">
+          <div>
+            <h2 id="activeGroupTitle">Select a conversation</h2>
+            <p id="activeGroupSubtext">Choose a group to start chatting</p>
+          </div>
+          <div class="chat-actions">
+            <button id="copyInviteBtn" class="btn-secondary" type="button" disabled>Copy Invite Link</button>
+            <button id="leaveGroupBtn" class="btn-danger" type="button" disabled>Leave Group</button>
+          </div>
+        </div>
+
+        <div id="messageList" class="messages glass-card"></div>
+
+        <form id="messageForm" class="message-form glass-card hidden">
           <input id="messageInput" type="text" maxlength="4000" placeholder="Type message..." required />
-          <button type="submit">Send</button>
+          <button class="btn-primary icon-send" type="submit">Send</button>
         </form>
       </section>
 
-      <aside class="panel ai-config">
-        <h2>Add AI Friend</h2>
-        <form id="addAiForm">
+      <aside class="sidebar right-sidebar">
+        <div class="panel-header">
+          <h3>AI Companions</h3>
+          <span class="chip">Live</span>
+        </div>
+
+        <form id="addAiForm" class="ai-form">
           <input id="aiNameInput" type="text" placeholder="AI name" required />
           <textarea id="aiPersonaInput" placeholder="Persona (how this AI behaves)" required></textarea>
-          <input id="aiModelInput" type="text" placeholder="Model (e.g. openai/gpt-4o-mini)" value="openai/gpt-4o-mini" />
+          <input
+            id="aiModelInput"
+            type="text"
+            placeholder="Model (e.g. openai/gpt-4o-mini)"
+            value="openai/gpt-4o-mini"
+          />
           <label>
             Temperature
             <input id="aiTemperatureInput" type="number" min="0" max="2" step="0.1" value="1" />
@@ -57,13 +97,16 @@
             Reply delay (ms)
             <input id="aiDelayInput" type="number" min="0" max="15000" step="250" value="1500" />
           </label>
-          <button id="addAiBtn" type="submit" disabled>Add AI to selected group</button>
+          <button id="addAiBtn" class="btn-primary" type="submit" disabled>Add AI to selected group</button>
         </form>
 
-        <h3>AI Members</h3>
-        <ul id="aiMemberList"></ul>
+        <ul id="aiMemberList" class="ai-member-list"></ul>
+        <div class="tip-card">
+          <strong>Pro Tip</strong>
+          <p>Add multiple AI companions with different specialties for diverse perspectives.</p>
+        </div>
       </aside>
-    </main>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script type="module" src="./app.js"></script>
