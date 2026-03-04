@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL || "";
 const OPENROUTER_SITE_NAME = process.env.OPENROUTER_SITE_NAME || "AI Group Chat";
+const OPENROUTER_ROUTER_MODEL = process.env.OPENROUTER_ROUTER_MODEL || "openai/gpt-4o-mini";
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -229,8 +230,16 @@ async function triggerAiReplies(group, humanMessage) {
     .map((m) => `${m.senderName} [${m.senderType}]: ${m.text}`)
     .join("\n");
 
+  const responders = await selectRespondingAiMembers({
+    aiMembers: group.aiMembers,
+    recentContext: context,
+    latestMessage: humanMessage.text,
+    latestSender: humanMessage.senderName
+  });
+  if (!responders.length) return;
+
   await Promise.all(
-    group.aiMembers.map(async (aiMember) => {
+    responders.map(async (aiMember) => {
       const prompt = [
         `You are "${aiMember.name}" in a private friend group chat.`,
         "You are an AI roleplaying as a normal participant with this persona:",
@@ -268,6 +277,72 @@ async function triggerAiReplies(group, humanMessage) {
       emitGroupMessage(group.id, aiMessage);
     })
   );
+}
+
+async function selectRespondingAiMembers({ aiMembers, recentContext, latestMessage, latestSender }) {
+  const roster = aiMembers.map((ai) => ({
+    name: ai.name,
+    persona: ai.persona
+  }));
+
+  const prompt = [
+    "You are selecting which chat companions should reply to a new message.",
+    "Return JSON only, with format: {\"responders\":[\"Name1\",\"Name2\"]}",
+    "Rules:",
+    "- Choose only members who should naturally respond now.",
+    "- It is valid to return an empty array if no AI should respond.",
+    "- Prefer 0-2 responders unless more are clearly needed.",
+    "- Use names exactly as listed.",
+    "",
+    `Latest sender: ${latestSender}`,
+    `Latest message: ${latestMessage}`,
+    "",
+    "AI roster:",
+    JSON.stringify(roster),
+    "",
+    "Recent conversation:",
+    recentContext
+  ].join("\n");
+
+  const raw = await requestOpenRouterCompletion({
+    model: OPENROUTER_ROUTER_MODEL,
+    temperature: 0.2,
+    prompt
+  });
+
+  const names = parseResponderNames(raw);
+  if (!names.length) return [];
+
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  return aiMembers.filter((ai) => wanted.has(String(ai.name).toLowerCase()));
+}
+
+function parseResponderNames(raw) {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed?.responders)) {
+      return parsed.responders
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+    }
+  } catch (_error) {
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed?.responders)) {
+          return parsed.responders
+            .map((value) => String(value || "").trim())
+            .filter(Boolean);
+        }
+      } catch (_ignored) {}
+    }
+  }
+
+  return [];
 }
 
 async function requestOpenRouterCompletion({ model, temperature, prompt }) {

@@ -249,13 +249,11 @@ function appendMessage(message) {
   row.className = `message ${isMe ? "me" : ""}`;
   const created = new Date(message.createdAt);
   const time = Number.isNaN(created.getTime()) ? "" : created.toLocaleTimeString();
-  const aiBadge = message.senderType === "ai" ? `<span class="badge-ai">AI</span>` : "";
   row.innerHTML = `
     ${isMe ? "" : `<div class="message-avatar ${message.senderType === "ai" ? "ai" : ""}">${escapeHtml(initials)}</div>`}
     <div class="message-body">
       <div class="meta">
         <span class="sender">${escapeHtml(message.senderName)}</span>
-        ${aiBadge}
         <span>${escapeHtml(time)}</span>
       </div>
       <div class="bubble ${message.senderType === "ai" ? "ai" : "human"}">${escapeHtml(message.text || "")}</div>
