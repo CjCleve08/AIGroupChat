@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const http = require("http");
 const path = require("path");
@@ -23,7 +25,11 @@ app.use(express.static(path.join(__dirname, "public")));
 const groups = new Map();
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, groups: groups.size });
+  res.json({
+    ok: true,
+    groups: groups.size,
+    aiConfigured: Boolean(OPENROUTER_API_KEY)
+  });
 });
 
 app.get("/api/groups", (_req, res) => {
@@ -158,6 +164,9 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, () => {
   console.log(`AI Group Chat listening on port ${PORT}`);
+  if (!OPENROUTER_API_KEY) {
+    console.warn("OPENROUTER_API_KEY is missing. AI replies are disabled.");
+  }
 });
 
 function toGroupSummary(group) {
