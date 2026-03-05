@@ -13,7 +13,19 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <section id="signInScreen" class="sign-in-screen">
+      <div class="ambient ambient-left"></div>
+      <div class="ambient ambient-right"></div>
+      <div class="ambient ambient-center"></div>
+      <div class="sign-in-card glass-card">
+        <div class="sign-in-logo">✷</div>
+        <h1>AI Group Chat</h1>
+        <p>Sign in with Google to access your groups, messages, and AI companions.</p>
+        <button id="googleSignInBtn" class="btn-primary" type="button">Continue with Google</button>
+      </div>
+    </section>
+
+    <div id="appShell" class="app-shell hidden">
       <div class="ambient ambient-left"></div>
       <div class="ambient ambient-right"></div>
       <div class="ambient ambient-center"></div>
@@ -86,6 +98,7 @@
             <input id="profileAvatarInput" type="url" placeholder="https://..." />
           </label>
           <div class="modal-actions">
+            <button id="signOutBtn" class="btn-secondary hidden" type="button">Sign Out</button>
             <button id="cancelProfileBtn" class="btn-secondary" type="button">Cancel</button>
             <button class="btn-primary" type="submit">Save Profile</button>
           </div>

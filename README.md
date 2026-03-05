@@ -1,31 +1,23 @@
-# AI Group Chat (Render + OpenRouter)
+# AI Group Chat (Firebase Auth + Firestore + OpenRouter)
 
-A full-stack chat app where real users and AI participants talk in the same group conversation.
-
-This version does **not** require Firebase. It is built for Render deployment with Node.js.
-
-## Features
-
-- Realtime group chat using Socket.IO
-- Create groups and join by group ID
-- Add AI members to each group with:
-  - name
-  - persona
-  - model
-  - temperature
-  - reply delay
-- Server-side AI requests via OpenRouter (API key stays private on backend)
+Realtime group chat where humans and AI companions talk together.
 
 ## Stack
 
-- Backend: Node.js + Express + Socket.IO
-- Frontend: Vanilla HTML/CSS/JS
-- AI: OpenRouter Chat Completions API
-- Hosting: Render Web Service
+- Backend: Node.js + Express + Socket.IO + Firebase Admin SDK
+- Frontend: Vanilla HTML/CSS/JS + Firebase Web Auth
+- Database: Firestore
+- AI: OpenRouter chat completions
 
-## Local development
+## What Firebase Handles
 
-1. Install dependencies:
+- Authentication: Firebase Auth (Google sign-in)
+- Persistence: Firestore stores groups, members, AI members, and messages
+- Authorization: server verifies Firebase ID tokens before API access
+
+## Local Setup
+
+1. Install:
 
 ```bash
 npm install
@@ -37,40 +29,40 @@ npm install
 cp .env.example .env
 ```
 
-3. Fill in `OPENROUTER_API_KEY` in `.env`.
+3. Fill all required Firebase + OpenRouter values in `.env`:
 
-4. Run:
+- `OPENROUTER_API_KEY`
+- `FIREBASE_PROJECT_ID`
+- one of:
+  - `FIREBASE_SERVICE_ACCOUNT_JSON`
+  - `FIREBASE_SERVICE_ACCOUNT_BASE64`
+- frontend Firebase web config:
+  - `FIREBASE_WEB_API_KEY`
+  - `FIREBASE_AUTH_DOMAIN`
+  - `FIREBASE_STORAGE_BUCKET`
+  - `FIREBASE_MESSAGING_SENDER_ID`
+  - `FIREBASE_APP_ID`
+
+4. Start app:
 
 ```bash
-npm run dev
+npm start
 ```
 
-5. Open `http://localhost:3000`.
+5. Open `http://localhost:3000` and sign in with Google.
 
-## Deploy to Render
+## Render Deployment
 
-1. Push this project to GitHub.
-2. In Render, create a new **Web Service** from that repo.
-3. Use:
-   - Build Command: `npm install`
-   - Start Command: `npm start`
-4. Add environment variables:
-   - `OPENROUTER_API_KEY` (required)
-   - `OPENROUTER_SITE_URL` (optional)
-   - `OPENROUTER_SITE_NAME` (optional)
-5. Deploy.
+1. Push to GitHub.
+2. Create Render Web Service.
+3. Build: `npm install`
+4. Start: `npm start`
+5. Add the same env vars from `.env.example`.
 
-You can also keep `render.yaml` in the repo and use Render Blueprint deploys.
+## Firestore Data Model (current)
 
-## Important note
-
-Current data storage is in-memory for fast MVP iteration. If the service restarts, groups/messages reset.
-
-For production persistence, move to PostgreSQL (Render Postgres) and store:
-
-- users
-- groups
-- memberships
-- ai_members
-- messages
-# AIGroupChat
+- `groups/{groupId}`
+  - core metadata (`name`, `ownerId`, counts, timestamps, `memberIds`)
+- `groups/{groupId}/members/{uid}`
+- `groups/{groupId}/ai_members/{aiId}`
+- `groups/{groupId}/messages/{messageId}`

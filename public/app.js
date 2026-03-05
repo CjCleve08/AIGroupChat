@@ -1,6 +1,19 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  updateProfile
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
 const socket = io();
 
 const ui = {
+  appShell: document.getElementById("appShell"),
+  signInScreen: document.getElementById("signInScreen"),
+  googleSignInBtn: document.getElementById("googleSignInBtn"),
   profileBtn: document.getElementById("profileBtn"),
   searchBtn: document.getElementById("searchBtn"),
   sidebarToggleBtn: document.getElementById("sidebarToggleBtn"),
@@ -9,6 +22,7 @@ const ui = {
   profileNameInput: document.getElementById("profileNameInput"),
   profileAvatarInput: document.getElementById("profileAvatarInput"),
   cancelProfileBtn: document.getElementById("cancelProfileBtn"),
+  signOutBtn: document.getElementById("signOutBtn"),
   createGroupForm: document.getElementById("createGroupForm"),
   groupList: document.getElementById("groupList"),
   activeGroupTitle: document.getElementById("activeGroupTitle"),
@@ -37,11 +51,15 @@ const ui = {
   closeMembersModalBtn: document.getElementById("closeMembersModalBtn")
 };
 
-let currentUsername = localStorage.getItem("aigc_username") || "";
-let currentAvatarUrl = localStorage.getItem("aigc_avatar_url") || "";
+let firebaseAuth = null;
+let authProvider = null;
+let currentUserId = "";
+let currentUsername = "";
+let currentAvatarUrl = "";
 let activeGroupId = null;
 let activeGroupName = "";
 let activeGroupOwner = "";
+let activeGroupOwnerId = "";
 let inviteGroupId = new URLSearchParams(window.location.search).get("group") || "";
 let groupSearchQuery = "";
 const typingNames = new Set();
@@ -49,10 +67,15 @@ let humanTypingActive = false;
 let typingStopTimer = null;
 let activeDialogResolver = null;
 refreshUiForName();
-loadGroups(inviteGroupId || undefined);
 syncProfileUi();
+setAuthUiVisibility(false);
+
+ui.googleSignInBtn?.addEventListener("click", async () => {
+  await startGoogleSignIn();
+});
 
 ui.profileBtn?.addEventListener("click", () => {
+  if (!ensureAuth()) return;
   openProfileModal();
 });
 
@@ -101,6 +124,8 @@ ui.dialogCancelBtn?.addEventListener("click", () => closeDialog(false));
 
 ui.profileForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (!ensureAuth()) return;
+
   const newName = String(ui.profileNameInput?.value || "").trim();
   if (!newName) {
     await showDialog({
@@ -111,10 +136,17 @@ ui.profileForm?.addEventListener("submit", async (event) => {
     });
     return;
   }
-  currentUsername = newName.slice(0, 32);
-  currentAvatarUrl = String(ui.profileAvatarInput?.value || "").trim();
-  localStorage.setItem("aigc_username", currentUsername);
-  localStorage.setItem("aigc_avatar_url", currentAvatarUrl);
+
+  const nextName = newName.slice(0, 32);
+  const nextAvatar = String(ui.profileAvatarInput?.value || "").trim();
+  await updateProfile(firebaseAuth.currentUser, {
+    displayName: nextName,
+    photoURL: nextAvatar || null
+  });
+  await firebaseAuth.currentUser.getIdToken(true);
+  currentUsername = nextName;
+  currentAvatarUrl = nextAvatar;
+
   closeProfileModal();
   refreshUiForName();
   syncProfileUi();
@@ -131,6 +163,12 @@ ui.profileForm?.addEventListener("submit", async (event) => {
     });
   }
   await loadGroups(activeGroupId || undefined);
+});
+
+ui.signOutBtn?.addEventListener("click", async () => {
+  if (!firebaseAuth) return;
+  await signOut(firebaseAuth);
+  closeProfileModal();
 });
 
 ui.searchBtn?.addEventListener("click", async () => {
@@ -158,31 +196,40 @@ ui.sidebarToggleBtn?.addEventListener("click", () => {
 
 ui.createGroupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!ensureName()) return;
-  const generatedName = `New Group ${Date.now().toString().slice(-4)}`;
-  const group = await api("/api/groups", {
-    method: "POST",
-    body: JSON.stringify({ username: currentUsername, name: generatedName })
-  });
-  await loadGroups(group.id);
+  if (!ensureAuth()) return;
+  try {
+    const generatedName = `New Group ${Date.now().toString().slice(-4)}`;
+    const group = await api("/api/groups", {
+      method: "POST",
+      body: JSON.stringify({ name: generatedName })
+    });
+    await loadGroups(group.id);
+  } catch (error) {
+    await showDialog({
+      title: "Unable to Create Group",
+      message: error?.message || "Please verify Firebase/Firestore setup and try again.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  }
 });
 
 ui.messageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!ensureName() || !activeGroupId) return;
+  if (!ensureAuth() || !activeGroupId) return;
   stopHumanTyping();
   const text = ui.messageInput.value.trim();
   if (!text) return;
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/messages`, {
     method: "POST",
-    body: JSON.stringify({ username: currentUsername, text })
+    body: JSON.stringify({ text, displayName: currentUsername })
   });
   ui.messageInput.value = "";
 });
 
 ui.addAiForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!ensureName() || !activeGroupId) return;
+  if (!ensureAuth() || !activeGroupId) return;
 
   const name = ui.aiNameInput.value.trim();
   const persona = ui.aiPersonaInput.value.trim();
@@ -192,7 +239,6 @@ ui.addAiForm.addEventListener("submit", async (event) => {
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/ai-members`, {
     method: "POST",
     body: JSON.stringify({
-      ownerName: currentUsername,
       name,
       persona,
       model,
@@ -277,14 +323,18 @@ socket.on("typing:stop", (payload) => {
 });
 
 async function loadGroups(preferredGroupId) {
-  const query = currentUsername ? `?username=${encodeURIComponent(currentUsername)}` : "";
-  const groups = await api(`/api/groups${query}`);
+  if (!ensureAuth({ silent: true })) {
+    ui.groupList.innerHTML = "";
+    return;
+  }
+
+  const groups = await api("/api/groups");
   const visibleGroups = groups.filter((g) => g.name.toLowerCase().includes(groupSearchQuery));
   ui.groupList.innerHTML = "";
   for (const group of visibleGroups) {
     const li = document.createElement("li");
     li.classList.toggle("active", group.id === activeGroupId);
-    const canManageGroup = isOwnerName(group.ownerName);
+    const canManageGroup = String(group.ownerId || "") === currentUserId;
     li.innerHTML = `
       <div class="title">${escapeHtml(group.name)}</div>
       <span class="subline">${getTotalCount(group)}</span>
@@ -295,7 +345,7 @@ async function loadGroups(preferredGroupId) {
     if (editBtn) {
       editBtn.addEventListener("click", async (event) => {
         event.stopPropagation();
-        if (!ensureName()) return;
+        if (!ensureAuth()) return;
         const result = await showDialog({
           title: "Rename Group",
           message: "Enter a new group name.",
@@ -311,7 +361,7 @@ async function loadGroups(preferredGroupId) {
 
         await api(`/api/groups/${encodeURIComponent(group.id)}`, {
           method: "PATCH",
-          body: JSON.stringify({ username: currentUsername, name: clean })
+          body: JSON.stringify({ name: clean })
         });
         if (activeGroupId === group.id) {
           activeGroupName = clean;
@@ -324,7 +374,7 @@ async function loadGroups(preferredGroupId) {
     if (leaveBtn) {
       leaveBtn.addEventListener("click", async (event) => {
         event.stopPropagation();
-        if (!ensureName()) return;
+        if (!ensureAuth()) return;
         const confirmation = await showDialog({
           title: "Leave Group",
           message: `Leave "${group.name}"?`,
@@ -336,7 +386,7 @@ async function loadGroups(preferredGroupId) {
 
         await api(`/api/groups/${encodeURIComponent(group.id)}/leave`, {
           method: "POST",
-          body: JSON.stringify({ username: currentUsername })
+          body: JSON.stringify({})
         });
 
         if (activeGroupId === group.id) {
@@ -344,6 +394,7 @@ async function loadGroups(preferredGroupId) {
           activeGroupId = null;
           activeGroupName = "";
           activeGroupOwner = "";
+          activeGroupOwnerId = "";
           typingNames.clear();
           stopHumanTyping();
           closeMembersModal();
@@ -375,6 +426,7 @@ async function selectGroup(group) {
   activeGroupId = group.id;
   activeGroupName = group.name;
   activeGroupOwner = String(group.ownerName || "");
+  activeGroupOwnerId = String(group.ownerId || "");
   typingNames.clear();
   stopHumanTyping();
   ui.activeGroupTitle.textContent = group.name;
@@ -400,11 +452,11 @@ async function selectGroup(group) {
 }
 
 async function joinActiveGroupIfNeeded() {
-  if (!activeGroupId || !currentUsername) return;
+  if (!activeGroupId || !ensureAuth({ silent: true })) return;
   try {
     await api(`/api/groups/${encodeURIComponent(activeGroupId)}/join`, {
       method: "POST",
-      body: JSON.stringify({ username: currentUsername })
+      body: JSON.stringify({ displayName: currentUsername })
     });
   } catch (_error) {
     // Group could be deleted; UI refresh handles consistency.
@@ -412,10 +464,10 @@ async function joinActiveGroupIfNeeded() {
 }
 
 async function joinGroupFromInvite(groupId) {
-  if (!ensureName()) return;
+  if (!ensureAuth()) return;
   await api(`/api/groups/${encodeURIComponent(groupId)}/join`, {
     method: "POST",
-    body: JSON.stringify({ username: currentUsername })
+    body: JSON.stringify({ displayName: currentUsername })
   });
   inviteGroupId = "";
   const url = new URL(window.location.href);
@@ -437,8 +489,8 @@ async function loadAiMembers(groupId) {
 function appendMessage(message) {
   const isMe =
     message.senderType === "human" &&
-    currentUsername &&
-    message.senderName?.toLowerCase() === currentUsername.toLowerCase();
+    ((message.senderId && message.senderId === currentUserId) ||
+      (currentUsername && message.senderName?.toLowerCase() === currentUsername.toLowerCase()));
   const initials = getInitials(message.senderName);
   const cleanText =
     message.senderType === "ai"
@@ -494,7 +546,7 @@ function renderTypingStatus() {
 }
 
 function handleHumanTypingInput() {
-  if (!activeGroupId || !currentUsername) return;
+  if (!activeGroupId || !currentUsername || !ensureAuth({ silent: true })) return;
 
   if (!humanTypingActive) {
     humanTypingActive = true;
@@ -594,33 +646,41 @@ function stripSpeakerPrefix(input, senderName = "") {
 
 function refreshUiForName() {
   const hasName = Boolean(currentUsername);
-  ui.messageForm.classList.toggle("hidden", !hasName || !activeGroupId);
-  ui.addAiBtn.disabled = !hasName || !activeGroupId || !isGroupOwner();
-  if (ui.addPersonBtn) ui.addPersonBtn.disabled = !hasName || !activeGroupId;
+  const hasAuth = Boolean(currentUserId);
+  ui.messageForm.classList.toggle("hidden", !hasName || !activeGroupId || !hasAuth);
+  ui.addAiBtn.disabled = !hasName || !activeGroupId || !hasAuth || !isGroupOwner();
+  if (ui.addPersonBtn) ui.addPersonBtn.disabled = !hasName || !activeGroupId || !hasAuth;
   if (ui.addAiModalBtn) {
-    const allowAiButton = hasName && !!activeGroupId && isGroupOwner();
+    const allowAiButton = hasName && hasAuth && !!activeGroupId && isGroupOwner();
     ui.addAiModalBtn.disabled = !allowAiButton;
     ui.addAiModalBtn.classList.toggle("hidden", !allowAiButton);
   }
 }
 
-function ensureName() {
-  if (currentUsername) return true;
-  openProfileModal();
-  showDialog({
-    title: "Profile Needed",
-    message: "Set your profile name first.",
-    mode: "alert",
-    confirmText: "OK"
-  });
+function ensureAuth(options = {}) {
+  const { silent = false } = options;
+  if (currentUserId && firebaseAuth?.currentUser) return true;
+  if (!silent) {
+    setAuthUiVisibility(false);
+  }
   return false;
 }
 
 async function api(url, options = {}) {
+  const skipAuth = Boolean(options.skipAuth);
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
+  if (!skipAuth) {
+    if (!ensureAuth()) throw new Error("Please sign in first.");
+    const token = await firebaseAuth.currentUser.getIdToken();
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     ...options
   });
 
@@ -636,10 +696,6 @@ async function api(url, options = {}) {
   return response.json();
 }
 
-if (inviteGroupId && currentUsername) {
-  joinGroupFromInvite(inviteGroupId).catch(() => {});
-}
-
 function escapeHtml(input) {
   return String(input)
     .replaceAll("&", "&amp;")
@@ -652,6 +708,7 @@ function escapeHtml(input) {
 function syncProfileUi() {
   if (ui.profileNameInput) ui.profileNameInput.value = currentUsername;
   if (ui.profileAvatarInput) ui.profileAvatarInput.value = currentAvatarUrl;
+  if (ui.signOutBtn) ui.signOutBtn.classList.toggle("hidden", !currentUserId);
   if (ui.profileBtn) {
     ui.profileBtn.classList.add("profile-avatar");
     if (currentAvatarUrl) {
@@ -686,13 +743,15 @@ function closeAiModal() {
 async function openMembersModal() {
   const payload = await api(`/api/groups/${encodeURIComponent(activeGroupId)}/participants`);
   activeGroupOwner = String(payload.ownerName || activeGroupOwner || "");
+  activeGroupOwnerId = String(payload.ownerId || activeGroupOwnerId || "");
   const canManageGroup = isGroupOwner();
 
   if (ui.memberList) {
     ui.memberList.innerHTML = "";
     const unified = [
       ...(payload.members || []).map((member) => ({
-        id: `human:${member.name}`,
+        id: `human:${member.uid}`,
+        uid: member.uid,
         name: member.name,
         isOwner: Boolean(member.isOwner),
         type: "human"
@@ -724,7 +783,7 @@ async function openMembersModal() {
       if (button) {
         button.addEventListener("click", async () => {
           if (member.type === "human") {
-            await removeMember(member.name);
+            await removeMember(member.uid, member.name);
           } else {
             await removeAiMember(member.aiId, member.name);
           }
@@ -741,7 +800,7 @@ function closeMembersModal() {
   ui.membersModal?.classList.add("hidden");
 }
 
-async function removeMember(memberName) {
+async function removeMember(memberId, memberName) {
   if (!isGroupOwner()) return;
   closeMembersModal();
   const confirmation = await showDialog({
@@ -758,7 +817,7 @@ async function removeMember(memberName) {
 
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/remove-member`, {
     method: "POST",
-    body: JSON.stringify({ username: currentUsername, memberName })
+    body: JSON.stringify({ memberId })
   });
   await loadGroups(activeGroupId);
   await openMembersModal();
@@ -781,18 +840,14 @@ async function removeAiMember(aiId, aiName) {
 
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/remove-ai`, {
     method: "POST",
-    body: JSON.stringify({ username: currentUsername, aiId })
+    body: JSON.stringify({ aiId })
   });
   await loadGroups(activeGroupId);
   await openMembersModal();
 }
 
-function isOwnerName(ownerName) {
-  return String(ownerName || "").toLowerCase() === String(currentUsername || "").toLowerCase();
-}
-
 function isGroupOwner() {
-  return isOwnerName(activeGroupOwner);
+  return Boolean(currentUserId) && String(activeGroupOwnerId || "") === String(currentUserId);
 }
 
 function showDialog({
@@ -835,3 +890,92 @@ function closeDialog(confirmed) {
   ui.dialogModal?.classList.add("hidden");
   resolver({ confirmed, value });
 }
+
+function setAuthUiVisibility(isSignedIn) {
+  ui.appShell?.classList.toggle("hidden", !isSignedIn);
+  ui.signInScreen?.classList.toggle("hidden", isSignedIn);
+}
+
+async function initAuthAndData() {
+  try {
+    const firebaseConfig = await api("/api/firebase-config", { skipAuth: true });
+    if (!firebaseConfig?.projectId || !firebaseConfig?.apiKey) {
+      throw new Error("Firebase web config is missing on the server.");
+    }
+
+    const firebaseApp = initializeApp(firebaseConfig);
+    firebaseAuth = getAuth(firebaseApp);
+    authProvider = new GoogleAuthProvider();
+
+    onAuthStateChanged(firebaseAuth, async (user) => {
+      if (!user) {
+        currentUserId = "";
+        currentUsername = "";
+        currentAvatarUrl = "";
+        activeGroupId = null;
+        activeGroupName = "";
+        activeGroupOwner = "";
+        activeGroupOwnerId = "";
+        typingNames.clear();
+        ui.groupList.innerHTML = "";
+        ui.messageList.innerHTML = "";
+        ui.activeGroupTitle.textContent = "Select a conversation";
+        ui.activeGroupSubtext.textContent = "Choose a group to start chatting";
+        closeProfileModal();
+        closeAiModal();
+        closeMembersModal();
+        refreshUiForName();
+        syncProfileUi();
+        setAuthUiVisibility(false);
+        return;
+      }
+
+      currentUserId = user.uid;
+      currentUsername = String(user.displayName || user.email || "User").slice(0, 32);
+      currentAvatarUrl = String(user.photoURL || "");
+      setAuthUiVisibility(true);
+      refreshUiForName();
+      syncProfileUi();
+
+      try {
+        await loadGroups(inviteGroupId || activeGroupId || undefined);
+        if (inviteGroupId) {
+          await joinGroupFromInvite(inviteGroupId);
+        }
+      } catch (error) {
+        await showDialog({
+          title: "Firebase Setup Required",
+          message: error?.message || "Unable to load groups from Firestore.",
+          mode: "alert",
+          confirmText: "OK"
+        });
+      }
+    });
+  } catch (error) {
+    await showDialog({
+      title: "Firebase Setup Required",
+      message: error.message || "Unable to initialize Firebase.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  }
+}
+
+async function startGoogleSignIn() {
+  if (!firebaseAuth || !authProvider) return;
+  if (ui.googleSignInBtn) ui.googleSignInBtn.disabled = true;
+  try {
+    await signInWithPopup(firebaseAuth, authProvider);
+  } catch (error) {
+    await showDialog({
+      title: "Sign In Failed",
+      message: error?.message || "Unable to sign in with Google right now.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  } finally {
+    if (ui.googleSignInBtn) ui.googleSignInBtn.disabled = false;
+  }
+}
+
+initAuthAndData();
