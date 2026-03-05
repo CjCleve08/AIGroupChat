@@ -50,7 +50,9 @@
           <div class="chat-header-main">
             <div class="chat-header-text">
               <h2 id="activeGroupTitle">Select a conversation</h2>
-              <p id="activeGroupSubtext">Choose a group to start chatting</p>
+              <button id="activeGroupSubtext" class="subtext-link" type="button">
+                Choose a group to start chatting
+              </button>
             </div>
             <div class="chat-actions">
               <button id="addPersonBtn" class="btn-secondary" type="button" disabled>Add Person</button>
@@ -126,6 +128,17 @@
             <button id="addAiBtn" class="btn-primary" type="submit" disabled>Add AI</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div id="membersModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-members-modal="true"></div>
+      <div class="modal-card">
+        <h3>Group Members</h3>
+        <ul id="memberList" class="members-list"></ul>
+        <div class="modal-actions">
+          <button id="closeMembersModalBtn" class="btn-secondary" type="button">Close</button>
+        </div>
       </div>
     </div>
 

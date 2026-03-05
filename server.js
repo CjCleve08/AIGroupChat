@@ -96,6 +96,69 @@ app.post("/api/groups/:groupId/join", (req, res) => {
   res.json(toGroupSummary(group));
 });
 
+app.get("/api/groups/:groupId/participants", (req, res) => {
+  const group = groups.get(req.params.groupId);
+  if (!group) return res.status(404).json({ error: "group not found" });
+
+  const members = Array.from(group.members)
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({
+      name,
+      isOwner: name === group.ownerName
+    }));
+
+  res.json({
+    ownerName: group.ownerName,
+    members,
+    aiMembers: group.aiMembers
+  });
+});
+
+app.post("/api/groups/:groupId/remove-member", (req, res) => {
+  const group = groups.get(req.params.groupId);
+  if (!group) return res.status(404).json({ error: "group not found" });
+
+  const username = String(req.body?.username || "").trim();
+  const memberName = String(req.body?.memberName || "").trim();
+  if (!username || !memberName) {
+    return res.status(400).json({ error: "username and memberName are required" });
+  }
+  if (username !== group.ownerName) {
+    return res.status(403).json({ error: "only the group owner can remove members" });
+  }
+  if (memberName === group.ownerName) {
+    return res.status(400).json({ error: "owner cannot be removed" });
+  }
+  if (!group.members.has(memberName)) {
+    return res.status(404).json({ error: "member not found" });
+  }
+
+  group.members.delete(memberName);
+  res.json({ removed: true, group: toGroupSummary(group) });
+});
+
+app.post("/api/groups/:groupId/remove-ai", (req, res) => {
+  const group = groups.get(req.params.groupId);
+  if (!group) return res.status(404).json({ error: "group not found" });
+
+  const username = String(req.body?.username || "").trim();
+  const aiId = String(req.body?.aiId || "").trim();
+  if (!username || !aiId) {
+    return res.status(400).json({ error: "username and aiId are required" });
+  }
+  if (username !== group.ownerName) {
+    return res.status(403).json({ error: "only the group owner can remove AI members" });
+  }
+
+  const prevCount = group.aiMembers.length;
+  group.aiMembers = group.aiMembers.filter((ai) => ai.id !== aiId);
+  if (group.aiMembers.length === prevCount) {
+    return res.status(404).json({ error: "ai member not found" });
+  }
+
+  res.json({ removed: true, group: toGroupSummary(group) });
+});
+
 app.post("/api/groups/:groupId/leave", (req, res) => {
   const group = groups.get(req.params.groupId);
   if (!group) return res.status(404).json({ error: "group not found" });
@@ -476,25 +539,7 @@ function sanitizeAiReply(aiName, rawReply) {
   let reply = String(rawReply || "").trim();
   if (!reply) return "";
 
-  // Remove common speaker prefixes like: Parker:, Parker [ai]:, **Parker**:
-  const patterns = [
-    new RegExp(
-      `^(?:\\*\\*)?${escapeRegExp(aiName)}(?:\\*\\*)?\\s*(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
-      "i"
-    ),
-    /^[A-Za-z0-9 _.'’-]{1,50}\s*\[(?:ai|bot|assistant)\]\s*[:\-–—]\s*/i,
-    /^(?:ai|bot|assistant)\s*[:\-–—]\s*/i
-  ];
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const pattern of patterns) {
-      if (pattern.test(reply)) {
-        reply = reply.replace(pattern, "").trim();
-        changed = true;
-      }
-    }
-  }
+  reply = stripSpeakerPrefix(reply, aiName);
   // Remove prefixed first-line speaker labels in multiline outputs.
   const lines = reply.split("\n");
   if (lines.length) {
@@ -506,17 +551,47 @@ function sanitizeAiReply(aiName, rawReply) {
 }
 
 function sanitizeFirstLineSpeaker(line, aiName) {
-  let value = String(line || "").trim();
-  const escapedName = escapeRegExp(aiName);
-  const linePatterns = [
+  return stripSpeakerPrefix(String(line || ""), aiName);
+}
+
+function stripSpeakerPrefix(input, aiName = "") {
+  let value = String(input || "").trim();
+  if (!value) return "";
+
+  const escapedName = escapeRegExp(String(aiName || ""));
+  const genericLabel = "[A-Za-z0-9 _.'’-]{1,60}";
+  const wrappers = '(?:\\s*(?:["\'`]+)?\\s*(?:\\*\\*)?\\s*)';
+  const suffix = '(?:\\s*(?:\\*\\*)?\\s*(?:["\'`]+)?\\s*)';
+
+  const patterns = [
+    escapedName
+      ? new RegExp(
+          `^\\s*(?:[-*]\\s*)?${wrappers}${escapedName}${suffix}(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
+          "i"
+        )
+      : null,
     new RegExp(
-      `^(?:\\*\\*)?${escapedName}(?:\\*\\*)?\\s*(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
+      `^\\s*(?:[-*]\\s*)?${wrappers}${genericLabel}${suffix}\\[(?:ai|bot|assistant)\\]\\s*[:\\-–—]\\s*`,
       "i"
     ),
-    /^[A-Za-z0-9 _.'’-]{1,50}\s*\[(?:ai|bot|assistant)\]\s*[:\-–—]\s*/i
-  ];
-  for (const pattern of linePatterns) {
-    value = value.replace(pattern, "").trim();
+    new RegExp(
+      `^\\s*(?:[-*]\\s*)?${wrappers}${genericLabel}${suffix}\\s*[:\\-–—]\\s*`,
+      "i"
+    ),
+    /^(?:ai|bot|assistant)\s*[:\-–—]\s*/i
+  ].filter(Boolean);
+
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 6) {
+    changed = false;
+    guard += 1;
+    for (const pattern of patterns) {
+      if (pattern.test(value)) {
+        value = value.replace(pattern, "").trim();
+        changed = true;
+      }
+    }
   }
   return value;
 }

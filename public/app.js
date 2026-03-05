@@ -31,13 +31,17 @@ const ui = {
   dialogMessage: document.getElementById("dialogMessage"),
   dialogInput: document.getElementById("dialogInput"),
   dialogConfirmBtn: document.getElementById("dialogConfirmBtn"),
-  dialogCancelBtn: document.getElementById("dialogCancelBtn")
+  dialogCancelBtn: document.getElementById("dialogCancelBtn"),
+  membersModal: document.getElementById("membersModal"),
+  memberList: document.getElementById("memberList"),
+  closeMembersModalBtn: document.getElementById("closeMembersModalBtn")
 };
 
 let currentUsername = localStorage.getItem("aigc_username") || "";
 let currentAvatarUrl = localStorage.getItem("aigc_avatar_url") || "";
 let activeGroupId = null;
 let activeGroupName = "";
+let activeGroupOwner = "";
 let inviteGroupId = new URLSearchParams(window.location.search).get("group") || "";
 let groupSearchQuery = "";
 const typingNames = new Set();
@@ -72,6 +76,17 @@ ui.aiModal?.addEventListener("click", (event) => {
 
 ui.cancelAiModalBtn?.addEventListener("click", () => {
   closeAiModal();
+});
+
+ui.membersModal?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.dataset.closeMembersModal === "true") {
+    closeMembersModal();
+  }
+});
+
+ui.closeMembersModalBtn?.addEventListener("click", () => {
+  closeMembersModal();
 });
 
 ui.dialogModal?.addEventListener("click", (event) => {
@@ -226,7 +241,13 @@ ui.addPersonBtn?.addEventListener("click", async () => {
 
 ui.addAiModalBtn?.addEventListener("click", () => {
   if (!activeGroupId) return;
+  if (!isGroupOwner()) return;
   openAiModal();
+});
+
+ui.activeGroupSubtext?.addEventListener("click", async () => {
+  if (!activeGroupId) return;
+  await openMembersModal();
 });
 
 socket.on("message:new", (payload) => {
@@ -263,10 +284,11 @@ async function loadGroups(preferredGroupId) {
   for (const group of visibleGroups) {
     const li = document.createElement("li");
     li.classList.toggle("active", group.id === activeGroupId);
+    const canManageGroup = isOwnerName(group.ownerName);
     li.innerHTML = `
       <div class="title">${escapeHtml(group.name)}</div>
       <span class="subline">${getTotalCount(group)}</span>
-      <button class="group-edit-btn" type="button" aria-label="Rename group" title="Rename group">✎</button>
+      ${canManageGroup ? '<button class="group-edit-btn" type="button" aria-label="Rename group" title="Rename group">✎</button>' : ""}
       <button class="group-leave-btn" type="button" aria-label="Leave group" title="Leave group">⎋</button>
     `;
     const editBtn = li.querySelector(".group-edit-btn");
@@ -321,8 +343,10 @@ async function loadGroups(preferredGroupId) {
           socket.emit("group:leave-room", group.id);
           activeGroupId = null;
           activeGroupName = "";
+          activeGroupOwner = "";
           typingNames.clear();
           stopHumanTyping();
+          closeMembersModal();
           ui.messageList.innerHTML = "";
           ui.activeGroupTitle.textContent = "Select a conversation";
           ui.activeGroupSubtext.textContent = "Choose a group to start chatting";
@@ -350,14 +374,19 @@ async function selectGroup(group) {
   const previousGroupId = activeGroupId;
   activeGroupId = group.id;
   activeGroupName = group.name;
+  activeGroupOwner = String(group.ownerName || "");
   typingNames.clear();
   stopHumanTyping();
   ui.activeGroupTitle.textContent = group.name;
   ui.activeGroupSubtext.textContent = `${getTotalCount(group)} people`;
   ui.messageForm.classList.remove("hidden");
-  ui.addAiBtn.disabled = false;
+  const canManageGroup = isGroupOwner();
+  ui.addAiBtn.disabled = !canManageGroup;
   if (ui.addPersonBtn) ui.addPersonBtn.disabled = false;
-  if (ui.addAiModalBtn) ui.addAiModalBtn.disabled = false;
+  if (ui.addAiModalBtn) {
+    ui.addAiModalBtn.disabled = !canManageGroup;
+    ui.addAiModalBtn.classList.toggle("hidden", !canManageGroup);
+  }
   renderTypingStatus();
 
   if (previousGroupId && previousGroupId !== group.id) {
@@ -514,21 +543,45 @@ function getInitials(name) {
 }
 
 function sanitizeIncomingAiMessageText(senderName, text) {
-  let value = String(text || "").trim();
+  return stripSpeakerPrefix(String(text || ""), String(senderName || ""));
+}
+
+function escapeForRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripSpeakerPrefix(input, senderName = "") {
+  let value = String(input || "").trim();
   if (!value) return "";
-  const name = String(senderName || "").trim();
-  const escaped = escapeForRegex(name);
+
+  const escapedName = escapeForRegex(String(senderName || ""));
+  const genericLabel = "[A-Za-z0-9 _.'’-]{1,60}";
+  const wrappers = '(?:\\s*(?:["\'`]+)?\\s*(?:\\*\\*)?\\s*)';
+  const suffix = '(?:\\s*(?:\\*\\*)?\\s*(?:["\'`]+)?\\s*)';
+
   const patterns = [
+    escapedName
+      ? new RegExp(
+          `^\\s*(?:[-*]\\s*)?${wrappers}${escapedName}${suffix}(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
+          "i"
+        )
+      : null,
     new RegExp(
-      `^(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
+      `^\\s*(?:[-*]\\s*)?${wrappers}${genericLabel}${suffix}\\[(?:ai|bot|assistant)\\]\\s*[:\\-–—]\\s*`,
       "i"
     ),
-    /^[A-Za-z0-9 _.'’-]{1,50}\s*\[(?:ai|bot|assistant)\]\s*[:\-–—]\s*/i,
+    new RegExp(
+      `^\\s*(?:[-*]\\s*)?${wrappers}${genericLabel}${suffix}\\s*[:\\-–—]\\s*`,
+      "i"
+    ),
     /^(?:ai|bot|assistant)\s*[:\-–—]\s*/i
-  ];
+  ].filter(Boolean);
+
   let changed = true;
-  while (changed) {
+  let guard = 0;
+  while (changed && guard < 6) {
     changed = false;
+    guard += 1;
     for (const pattern of patterns) {
       if (pattern.test(value)) {
         value = value.replace(pattern, "").trim();
@@ -539,16 +592,16 @@ function sanitizeIncomingAiMessageText(senderName, text) {
   return value;
 }
 
-function escapeForRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function refreshUiForName() {
   const hasName = Boolean(currentUsername);
   ui.messageForm.classList.toggle("hidden", !hasName || !activeGroupId);
-  ui.addAiBtn.disabled = !hasName || !activeGroupId;
+  ui.addAiBtn.disabled = !hasName || !activeGroupId || !isGroupOwner();
   if (ui.addPersonBtn) ui.addPersonBtn.disabled = !hasName || !activeGroupId;
-  if (ui.addAiModalBtn) ui.addAiModalBtn.disabled = !hasName || !activeGroupId;
+  if (ui.addAiModalBtn) {
+    const allowAiButton = hasName && !!activeGroupId && isGroupOwner();
+    ui.addAiModalBtn.disabled = !allowAiButton;
+    ui.addAiModalBtn.classList.toggle("hidden", !allowAiButton);
+  }
 }
 
 function ensureName() {
@@ -628,6 +681,118 @@ function openAiModal() {
 
 function closeAiModal() {
   ui.aiModal?.classList.add("hidden");
+}
+
+async function openMembersModal() {
+  const payload = await api(`/api/groups/${encodeURIComponent(activeGroupId)}/participants`);
+  activeGroupOwner = String(payload.ownerName || activeGroupOwner || "");
+  const canManageGroup = isGroupOwner();
+
+  if (ui.memberList) {
+    ui.memberList.innerHTML = "";
+    const unified = [
+      ...(payload.members || []).map((member) => ({
+        id: `human:${member.name}`,
+        name: member.name,
+        isOwner: Boolean(member.isOwner),
+        type: "human"
+      })),
+      ...(payload.aiMembers || []).map((ai) => ({
+        id: `ai:${ai.id}`,
+        aiId: ai.id,
+        name: ai.name,
+        isOwner: false,
+        type: "ai"
+      }))
+    ].sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const member of unified) {
+      const li = document.createElement("li");
+      const ownerBadge = member.isOwner ? `<span class="badge">Owner</span>` : "";
+      const removeBtn =
+        canManageGroup && !member.isOwner
+          ? `<button class="btn-danger remove-btn" data-participant-id="${escapeHtml(member.id)}">Remove</button>`
+          : "";
+      li.innerHTML = `
+        <div>
+          <span class="name">${escapeHtml(member.name)}</span>
+          ${ownerBadge}
+        </div>
+        ${removeBtn}
+      `;
+      const button = li.querySelector("[data-participant-id]");
+      if (button) {
+        button.addEventListener("click", async () => {
+          if (member.type === "human") {
+            await removeMember(member.name);
+          } else {
+            await removeAiMember(member.aiId, member.name);
+          }
+        });
+      }
+      ui.memberList.appendChild(li);
+    }
+  }
+
+  ui.membersModal?.classList.remove("hidden");
+}
+
+function closeMembersModal() {
+  ui.membersModal?.classList.add("hidden");
+}
+
+async function removeMember(memberName) {
+  if (!isGroupOwner()) return;
+  closeMembersModal();
+  const confirmation = await showDialog({
+    title: "Remove Member",
+    message: `Remove "${memberName}" from the group?`,
+    mode: "confirm",
+    confirmText: "Remove",
+    cancelText: "Cancel"
+  });
+  if (!confirmation.confirmed) {
+    await openMembersModal();
+    return;
+  }
+
+  await api(`/api/groups/${encodeURIComponent(activeGroupId)}/remove-member`, {
+    method: "POST",
+    body: JSON.stringify({ username: currentUsername, memberName })
+  });
+  await loadGroups(activeGroupId);
+  await openMembersModal();
+}
+
+async function removeAiMember(aiId, aiName) {
+  if (!isGroupOwner()) return;
+  closeMembersModal();
+  const confirmation = await showDialog({
+    title: "Remove AI",
+    message: `Remove AI "${aiName}" from the group?`,
+    mode: "confirm",
+    confirmText: "Remove",
+    cancelText: "Cancel"
+  });
+  if (!confirmation.confirmed) {
+    await openMembersModal();
+    return;
+  }
+
+  await api(`/api/groups/${encodeURIComponent(activeGroupId)}/remove-ai`, {
+    method: "POST",
+    body: JSON.stringify({ username: currentUsername, aiId })
+  });
+  await loadGroups(activeGroupId);
+  await openMembersModal();
+}
+
+function isOwnerName(ownerName) {
+  return String(ownerName || "").toLowerCase() === String(currentUsername || "").toLowerCase();
+}
+
+function isGroupOwner() {
+  return isOwnerName(activeGroupOwner);
 }
 
 function showDialog({
