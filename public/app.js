@@ -1,10 +1,15 @@
 const socket = io();
 
 const ui = {
-  usernameInput: document.getElementById("usernameInput"),
-  saveNameBtn: document.getElementById("saveNameBtn"),
+  profileBtn: document.getElementById("profileBtn"),
+  searchBtn: document.getElementById("searchBtn"),
+  sidebarToggleBtn: document.getElementById("sidebarToggleBtn"),
+  profileModal: document.getElementById("profileModal"),
+  profileForm: document.getElementById("profileForm"),
+  profileNameInput: document.getElementById("profileNameInput"),
+  profileAvatarInput: document.getElementById("profileAvatarInput"),
+  cancelProfileBtn: document.getElementById("cancelProfileBtn"),
   createGroupForm: document.getElementById("createGroupForm"),
-  groupNameInput: document.getElementById("groupNameInput"),
   groupList: document.getElementById("groupList"),
   activeGroupTitle: document.getElementById("activeGroupTitle"),
   activeGroupSubtext: document.getElementById("activeGroupSubtext"),
@@ -17,57 +22,140 @@ const ui = {
   aiPersonaInput: document.getElementById("aiPersonaInput"),
   aiModelInput: document.getElementById("aiModelInput"),
   aiTemperatureInput: document.getElementById("aiTemperatureInput"),
-  aiDelayInput: document.getElementById("aiDelayInput"),
-  aiMemberList: document.getElementById("aiMemberList"),
-  profileName: document.getElementById("profileName"),
-  searchInput: document.getElementById("searchInput"),
-  copyInviteBtn: document.getElementById("copyInviteBtn"),
-  leaveGroupBtn: document.getElementById("leaveGroupBtn")
+  aiModal: document.getElementById("aiModal"),
+  cancelAiModalBtn: document.getElementById("cancelAiModalBtn"),
+  addPersonBtn: document.getElementById("addPersonBtn"),
+  addAiModalBtn: document.getElementById("addAiModalBtn"),
+  dialogModal: document.getElementById("dialogModal"),
+  dialogTitle: document.getElementById("dialogTitle"),
+  dialogMessage: document.getElementById("dialogMessage"),
+  dialogInput: document.getElementById("dialogInput"),
+  dialogConfirmBtn: document.getElementById("dialogConfirmBtn"),
+  dialogCancelBtn: document.getElementById("dialogCancelBtn")
 };
 
 let currentUsername = localStorage.getItem("aigc_username") || "";
+let currentAvatarUrl = localStorage.getItem("aigc_avatar_url") || "";
 let activeGroupId = null;
 let activeGroupName = "";
 let inviteGroupId = new URLSearchParams(window.location.search).get("group") || "";
-ui.usernameInput.value = currentUsername;
+let groupSearchQuery = "";
+const typingNames = new Set();
+let humanTypingActive = false;
+let typingStopTimer = null;
+let activeDialogResolver = null;
 refreshUiForName();
 loadGroups(inviteGroupId || undefined);
+syncProfileUi();
 
-ui.saveNameBtn.addEventListener("click", () => {
-  const newName = ui.usernameInput.value.trim();
+ui.profileBtn?.addEventListener("click", () => {
+  openProfileModal();
+});
+
+ui.cancelProfileBtn?.addEventListener("click", () => {
+  closeProfileModal();
+});
+
+ui.profileModal?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.dataset.closeModal === "true") {
+    closeProfileModal();
+  }
+});
+
+ui.aiModal?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.dataset.closeAiModal === "true") {
+    closeAiModal();
+  }
+});
+
+ui.cancelAiModalBtn?.addEventListener("click", () => {
+  closeAiModal();
+});
+
+ui.dialogModal?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.dataset.closeDialog === "true") {
+    closeDialog(false);
+  }
+});
+
+ui.dialogConfirmBtn?.addEventListener("click", () => closeDialog(true));
+ui.dialogCancelBtn?.addEventListener("click", () => closeDialog(false));
+
+ui.profileForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const newName = String(ui.profileNameInput?.value || "").trim();
   if (!newName) {
-    window.alert("Please enter a name.");
+    await showDialog({
+      title: "Missing Name",
+      message: "Please enter a display name.",
+      mode: "alert",
+      confirmText: "OK"
+    });
     return;
   }
   currentUsername = newName.slice(0, 32);
+  currentAvatarUrl = String(ui.profileAvatarInput?.value || "").trim();
   localStorage.setItem("aigc_username", currentUsername);
+  localStorage.setItem("aigc_avatar_url", currentAvatarUrl);
+  closeProfileModal();
   refreshUiForName();
-  if (ui.profileName) ui.profileName.textContent = currentUsername;
+  syncProfileUi();
   if (activeGroupId) {
-    joinActiveGroupIfNeeded();
+    await joinActiveGroupIfNeeded();
   } else if (inviteGroupId) {
     joinGroupFromInvite(inviteGroupId).catch((error) => {
-      window.alert(error.message || "Unable to join invite link.");
+      showDialog({
+        title: "Invite Error",
+        message: error.message || "Unable to join invite link.",
+        mode: "alert",
+        confirmText: "OK"
+      });
     });
+  }
+  await loadGroups(activeGroupId || undefined);
+});
+
+ui.searchBtn?.addEventListener("click", async () => {
+  const result = await showDialog({
+    title: "Search Groups",
+    message: "Enter a group name keyword.",
+    mode: "prompt",
+    defaultValue: groupSearchQuery,
+    confirmText: "Search",
+    cancelText: "Cancel",
+    placeholder: "Type group name..."
+  });
+  if (!result.confirmed) return;
+  groupSearchQuery = String(result.value || "").trim().toLowerCase();
+  await loadGroups(activeGroupId || undefined);
+});
+
+ui.sidebarToggleBtn?.addEventListener("click", () => {
+  const collapsed = document.body.classList.toggle("sidebar-collapsed");
+  if (ui.sidebarToggleBtn) {
+    ui.sidebarToggleBtn.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+    ui.sidebarToggleBtn.setAttribute("title", collapsed ? "Expand sidebar" : "Collapse sidebar");
   }
 });
 
 ui.createGroupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!ensureName()) return;
-  const name = ui.groupNameInput.value.trim();
-  if (!name) return;
+  const generatedName = `New Group ${Date.now().toString().slice(-4)}`;
   const group = await api("/api/groups", {
     method: "POST",
-    body: JSON.stringify({ name, username: currentUsername })
+    body: JSON.stringify({ username: currentUsername, name: generatedName })
   });
-  ui.groupNameInput.value = "";
   await loadGroups(group.id);
 });
 
 ui.messageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!ensureName() || !activeGroupId) return;
+  stopHumanTyping();
   const text = ui.messageInput.value.trim();
   if (!text) return;
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/messages`, {
@@ -85,7 +173,6 @@ ui.addAiForm.addEventListener("submit", async (event) => {
   const persona = ui.aiPersonaInput.value.trim();
   const model = ui.aiModelInput.value.trim();
   const temperature = Number(ui.aiTemperatureInput.value);
-  const responseDelayMs = Number(ui.aiDelayInput.value);
 
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/ai-members`, {
     method: "POST",
@@ -94,70 +181,157 @@ ui.addAiForm.addEventListener("submit", async (event) => {
       name,
       persona,
       model,
-      temperature,
-      responseDelayMs
+      temperature
     })
   });
 
   ui.aiNameInput.value = "";
   ui.aiPersonaInput.value = "";
   await loadAiMembers(activeGroupId);
+  await loadGroups(activeGroupId);
+  closeAiModal();
 });
 
-ui.copyInviteBtn?.addEventListener("click", async () => {
+ui.messageInput?.addEventListener("input", () => {
+  handleHumanTypingInput();
+});
+
+ui.messageInput?.addEventListener("blur", () => {
+  stopHumanTyping();
+});
+
+ui.addPersonBtn?.addEventListener("click", async () => {
   if (!activeGroupId) return;
   const inviteUrl = `${window.location.origin}/?group=${encodeURIComponent(activeGroupId)}`;
   try {
     await navigator.clipboard.writeText(inviteUrl);
-    ui.copyInviteBtn.textContent = "Copied";
-    setTimeout(() => {
-      ui.copyInviteBtn.textContent = "Copy Invite Link";
-    }, 1200);
+    await showDialog({
+      title: "Invite Link Copied",
+      message: "Share the invite link with a friend to add them to this group.",
+      mode: "alert",
+      confirmText: "OK"
+    });
   } catch (_error) {
-    window.prompt("Copy this invite link:", inviteUrl);
+    await showDialog({
+      title: "Share Invite Link",
+      message: "Copy this invite link manually.",
+      mode: "prompt",
+      defaultValue: inviteUrl,
+      confirmText: "Close",
+      cancelText: "",
+      placeholder: ""
+    });
   }
 });
 
-ui.leaveGroupBtn?.addEventListener("click", async () => {
-  if (!ensureName() || !activeGroupId) return;
-  const confirmed = window.confirm(`Leave "${activeGroupName}"?`);
-  if (!confirmed) return;
-
-  await api(`/api/groups/${encodeURIComponent(activeGroupId)}/leave`, {
-    method: "POST",
-    body: JSON.stringify({ username: currentUsername })
-  });
-
-  socket.emit("group:leave-room", activeGroupId);
-  activeGroupId = null;
-  activeGroupName = "";
-  ui.messageList.innerHTML = "";
-  ui.aiMemberList.innerHTML = "";
-  ui.activeGroupTitle.textContent = "Select a conversation";
-  ui.activeGroupSubtext.textContent = "Choose a group to start chatting";
-  refreshUiForName();
-  await loadGroups();
+ui.addAiModalBtn?.addEventListener("click", () => {
+  if (!activeGroupId) return;
+  openAiModal();
 });
 
 socket.on("message:new", (payload) => {
   if (!activeGroupId) return;
   if (!payload || payload.groupId !== activeGroupId) return;
+  typingNames.delete(payload.message?.senderName || "");
+  renderTypingStatus();
   appendMessage(payload.message);
+});
+
+socket.on("typing:start", (payload) => {
+  if (!activeGroupId) return;
+  if (!payload || payload.groupId !== activeGroupId) return;
+  const name = String(payload.senderName || "").trim();
+  if (!name) return;
+  typingNames.add(name);
+  renderTypingStatus();
+});
+
+socket.on("typing:stop", (payload) => {
+  if (!activeGroupId) return;
+  if (!payload || payload.groupId !== activeGroupId) return;
+  const name = String(payload.senderName || "").trim();
+  if (!name) return;
+  typingNames.delete(name);
+  renderTypingStatus();
 });
 
 async function loadGroups(preferredGroupId) {
   const query = currentUsername ? `?username=${encodeURIComponent(currentUsername)}` : "";
   const groups = await api(`/api/groups${query}`);
-  const search = String(ui.searchInput?.value || "").trim().toLowerCase();
-  const visibleGroups = groups.filter((g) => g.name.toLowerCase().includes(search));
+  const visibleGroups = groups.filter((g) => g.name.toLowerCase().includes(groupSearchQuery));
   ui.groupList.innerHTML = "";
   for (const group of visibleGroups) {
     const li = document.createElement("li");
     li.classList.toggle("active", group.id === activeGroupId);
     li.innerHTML = `
       <div class="title">${escapeHtml(group.name)}</div>
-      <span class="subline">${group.memberCount} members | ${group.aiCount} AI</span>
+      <span class="subline">${getTotalCount(group)}</span>
+      <button class="group-edit-btn" type="button" aria-label="Rename group" title="Rename group">✎</button>
+      <button class="group-leave-btn" type="button" aria-label="Leave group" title="Leave group">⎋</button>
     `;
+    const editBtn = li.querySelector(".group-edit-btn");
+    if (editBtn) {
+      editBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (!ensureName()) return;
+        const result = await showDialog({
+          title: "Rename Group",
+          message: "Enter a new group name.",
+          mode: "prompt",
+          defaultValue: group.name,
+          confirmText: "Save",
+          cancelText: "Cancel",
+          placeholder: "Group name"
+        });
+        if (!result.confirmed) return;
+        const clean = String(result.value || "").trim();
+        if (!clean) return;
+
+        await api(`/api/groups/${encodeURIComponent(group.id)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ username: currentUsername, name: clean })
+        });
+        if (activeGroupId === group.id) {
+          activeGroupName = clean;
+          ui.activeGroupTitle.textContent = clean;
+        }
+        await loadGroups(group.id);
+      });
+    }
+    const leaveBtn = li.querySelector(".group-leave-btn");
+    if (leaveBtn) {
+      leaveBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (!ensureName()) return;
+        const confirmation = await showDialog({
+          title: "Leave Group",
+          message: `Leave "${group.name}"?`,
+          mode: "confirm",
+          confirmText: "Leave",
+          cancelText: "Cancel"
+        });
+        if (!confirmation.confirmed) return;
+
+        await api(`/api/groups/${encodeURIComponent(group.id)}/leave`, {
+          method: "POST",
+          body: JSON.stringify({ username: currentUsername })
+        });
+
+        if (activeGroupId === group.id) {
+          socket.emit("group:leave-room", group.id);
+          activeGroupId = null;
+          activeGroupName = "";
+          typingNames.clear();
+          stopHumanTyping();
+          ui.messageList.innerHTML = "";
+          ui.activeGroupTitle.textContent = "Select a conversation";
+          ui.activeGroupSubtext.textContent = "Choose a group to start chatting";
+          renderTypingStatus();
+          refreshUiForName();
+        }
+        await loadGroups();
+      });
+    }
     li.addEventListener("click", () => selectGroup(group));
     ui.groupList.appendChild(li);
   }
@@ -176,12 +350,15 @@ async function selectGroup(group) {
   const previousGroupId = activeGroupId;
   activeGroupId = group.id;
   activeGroupName = group.name;
+  typingNames.clear();
+  stopHumanTyping();
   ui.activeGroupTitle.textContent = group.name;
-  ui.activeGroupSubtext.textContent = `${group.memberCount} members | ${group.aiCount} AI`;
+  ui.activeGroupSubtext.textContent = `${getTotalCount(group)} people`;
   ui.messageForm.classList.remove("hidden");
   ui.addAiBtn.disabled = false;
-  if (ui.copyInviteBtn) ui.copyInviteBtn.disabled = false;
-  if (ui.leaveGroupBtn) ui.leaveGroupBtn.disabled = false;
+  if (ui.addPersonBtn) ui.addPersonBtn.disabled = false;
+  if (ui.addAiModalBtn) ui.addAiModalBtn.disabled = false;
+  renderTypingStatus();
 
   if (previousGroupId && previousGroupId !== group.id) {
     socket.emit("group:leave-room", previousGroupId);
@@ -225,13 +402,7 @@ async function loadMessages(groupId) {
 }
 
 async function loadAiMembers(groupId) {
-  const aiMembers = await api(`/api/groups/${encodeURIComponent(groupId)}/ai-members`);
-  ui.aiMemberList.innerHTML = "";
-  for (const aiMember of aiMembers) {
-    const li = document.createElement("li");
-    li.textContent = `${aiMember.name} - ${aiMember.model}`;
-    ui.aiMemberList.appendChild(li);
-  }
+  await api(`/api/groups/${encodeURIComponent(groupId)}/ai-members`);
 }
 
 function appendMessage(message) {
@@ -239,12 +410,11 @@ function appendMessage(message) {
     message.senderType === "human" &&
     currentUsername &&
     message.senderName?.toLowerCase() === currentUsername.toLowerCase();
-  const initials = String(message.senderName || "?")
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const initials = getInitials(message.senderName);
+  const cleanText =
+    message.senderType === "ai"
+      ? sanitizeIncomingAiMessageText(message.senderName, message.text)
+      : String(message.text || "");
   const row = document.createElement("div");
   row.className = `message ${isMe ? "me" : ""}`;
   const created = new Date(message.createdAt);
@@ -256,26 +426,140 @@ function appendMessage(message) {
         <span class="sender">${escapeHtml(message.senderName)}</span>
         <span>${escapeHtml(time)}</span>
       </div>
-      <div class="bubble ${message.senderType === "ai" ? "ai" : "human"}">${escapeHtml(message.text || "")}</div>
+      <div class="bubble ${message.senderType === "ai" ? "ai" : "human"}">${escapeHtml(cleanText)}</div>
     </div>
   `;
   ui.messageList.appendChild(row);
+  renderTypingStatus();
   ui.messageList.scrollTop = ui.messageList.scrollHeight;
+}
+
+function renderTypingStatus() {
+  if (!ui.messageList) return;
+
+  const existing = ui.messageList.querySelectorAll(".typing-row");
+  for (const node of existing) node.remove();
+
+  const visibleTypingNames = Array.from(typingNames).filter(
+    (name) => String(name || "").toLowerCase() !== String(currentUsername || "").toLowerCase()
+  );
+  if (!visibleTypingNames.length) return;
+
+  for (const name of visibleTypingNames) {
+    const row = document.createElement("div");
+    row.className = "message typing-row";
+    row.innerHTML = `
+      <div class="message-avatar ai">${escapeHtml(getInitials(name))}</div>
+      <div class="message-body">
+        <div class="meta">
+          <span class="sender">${escapeHtml(name)}</span>
+        </div>
+        <div class="bubble ai typing-bubble">
+          <span class="typing-dots"><span></span><span></span><span></span></span>
+        </div>
+      </div>
+    `;
+    ui.messageList.appendChild(row);
+  }
+  ui.messageList.scrollTop = ui.messageList.scrollHeight;
+}
+
+function handleHumanTypingInput() {
+  if (!activeGroupId || !currentUsername) return;
+
+  if (!humanTypingActive) {
+    humanTypingActive = true;
+    socket.emit("typing:start", {
+      groupId: activeGroupId,
+      senderName: currentUsername
+    });
+  }
+
+  if (typingStopTimer) clearTimeout(typingStopTimer);
+  typingStopTimer = setTimeout(() => {
+    stopHumanTyping();
+  }, 1200);
+}
+
+function stopHumanTyping() {
+  if (typingStopTimer) {
+    clearTimeout(typingStopTimer);
+    typingStopTimer = null;
+  }
+  if (!humanTypingActive || !activeGroupId || !currentUsername) {
+    humanTypingActive = false;
+    return;
+  }
+  humanTypingActive = false;
+  socket.emit("typing:stop", {
+    groupId: activeGroupId,
+    senderName: currentUsername
+  });
+}
+
+function getTotalCount(group) {
+  if (Number.isFinite(group?.totalCount)) return group.totalCount;
+  const members = Number(group?.memberCount || 0);
+  const ai = Number(group?.aiCount || 0);
+  return members + ai;
+}
+
+function getInitials(name) {
+  return String(name || "?")
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function sanitizeIncomingAiMessageText(senderName, text) {
+  let value = String(text || "").trim();
+  if (!value) return "";
+  const name = String(senderName || "").trim();
+  const escaped = escapeForRegex(name);
+  const patterns = [
+    new RegExp(
+      `^(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*(?:\\[(?:ai|bot|assistant)\\])?\\s*[:\\-–—]\\s*`,
+      "i"
+    ),
+    /^[A-Za-z0-9 _.'’-]{1,50}\s*\[(?:ai|bot|assistant)\]\s*[:\-–—]\s*/i,
+    /^(?:ai|bot|assistant)\s*[:\-–—]\s*/i
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const pattern of patterns) {
+      if (pattern.test(value)) {
+        value = value.replace(pattern, "").trim();
+        changed = true;
+      }
+    }
+  }
+  return value;
+}
+
+function escapeForRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function refreshUiForName() {
   const hasName = Boolean(currentUsername);
-  ui.saveNameBtn.textContent = hasName ? "Update" : "Save";
   ui.messageForm.classList.toggle("hidden", !hasName || !activeGroupId);
   ui.addAiBtn.disabled = !hasName || !activeGroupId;
-  if (ui.copyInviteBtn) ui.copyInviteBtn.disabled = !hasName || !activeGroupId;
-  if (ui.leaveGroupBtn) ui.leaveGroupBtn.disabled = !hasName || !activeGroupId;
-  if (ui.profileName && hasName) ui.profileName.textContent = currentUsername;
+  if (ui.addPersonBtn) ui.addPersonBtn.disabled = !hasName || !activeGroupId;
+  if (ui.addAiModalBtn) ui.addAiModalBtn.disabled = !hasName || !activeGroupId;
 }
 
 function ensureName() {
   if (currentUsername) return true;
-  window.alert("Set your name first.");
+  openProfileModal();
+  showDialog({
+    title: "Profile Needed",
+    message: "Set your profile name first.",
+    mode: "alert",
+    confirmText: "OK"
+  });
   return false;
 }
 
@@ -299,12 +583,6 @@ async function api(url, options = {}) {
   return response.json();
 }
 
-if (ui.searchInput) {
-  ui.searchInput.addEventListener("input", () => {
-    loadGroups(activeGroupId).catch(() => {});
-  });
-}
-
 if (inviteGroupId && currentUsername) {
   joinGroupFromInvite(inviteGroupId).catch(() => {});
 }
@@ -316,4 +594,79 @@ function escapeHtml(input) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function syncProfileUi() {
+  if (ui.profileNameInput) ui.profileNameInput.value = currentUsername;
+  if (ui.profileAvatarInput) ui.profileAvatarInput.value = currentAvatarUrl;
+  if (ui.profileBtn) {
+    ui.profileBtn.classList.add("profile-avatar");
+    if (currentAvatarUrl) {
+      ui.profileBtn.style.backgroundImage = `url("${currentAvatarUrl}")`;
+      ui.profileBtn.textContent = "";
+    } else {
+      ui.profileBtn.style.backgroundImage = "";
+      ui.profileBtn.textContent = getInitials(currentUsername || "ME");
+    }
+  }
+}
+
+function openProfileModal() {
+  syncProfileUi();
+  ui.profileModal?.classList.remove("hidden");
+  ui.profileNameInput?.focus();
+}
+
+function closeProfileModal() {
+  ui.profileModal?.classList.add("hidden");
+}
+
+function openAiModal() {
+  ui.aiModal?.classList.remove("hidden");
+  ui.aiNameInput?.focus();
+}
+
+function closeAiModal() {
+  ui.aiModal?.classList.add("hidden");
+}
+
+function showDialog({
+  title = "Notice",
+  message = "",
+  mode = "alert",
+  defaultValue = "",
+  confirmText = "OK",
+  cancelText = "Cancel",
+  placeholder = ""
+}) {
+  return new Promise((resolve) => {
+    activeDialogResolver = resolve;
+    if (ui.dialogTitle) ui.dialogTitle.textContent = title;
+    if (ui.dialogMessage) ui.dialogMessage.textContent = message;
+    if (ui.dialogConfirmBtn) ui.dialogConfirmBtn.textContent = confirmText || "OK";
+    if (ui.dialogCancelBtn) ui.dialogCancelBtn.textContent = cancelText || "Cancel";
+
+    const promptMode = mode === "prompt";
+    if (ui.dialogInput) {
+      ui.dialogInput.classList.toggle("hidden", !promptMode);
+      ui.dialogInput.value = String(defaultValue || "");
+      ui.dialogInput.placeholder = placeholder || "";
+      ui.dialogInput.readOnly = !promptMode && defaultValue !== "";
+    }
+
+    const showCancel = mode === "confirm" || (mode === "prompt" && cancelText !== "");
+    if (ui.dialogCancelBtn) ui.dialogCancelBtn.classList.toggle("hidden", !showCancel);
+
+    ui.dialogModal?.classList.remove("hidden");
+    if (promptMode) ui.dialogInput?.focus();
+  });
+}
+
+function closeDialog(confirmed) {
+  if (!activeDialogResolver) return;
+  const resolver = activeDialogResolver;
+  activeDialogResolver = null;
+  const value = ui.dialogInput ? ui.dialogInput.value : "";
+  ui.dialogModal?.classList.add("hidden");
+  resolver({ confirmed, value });
 }

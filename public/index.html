@@ -19,54 +19,48 @@
       <div class="ambient ambient-center"></div>
 
       <aside class="sidebar left-sidebar">
-        <div class="panel-header">
-          <div class="brand">
-            <div class="logo">✦</div>
-            <div>
-              <h1>AI Chats</h1>
-              <p>with friends & AI</p>
-            </div>
+        <div class="left-topbar">
+          <button id="profileBtn" class="icon-btn" type="button" aria-label="Profile settings">✷</button>
+          <div class="left-topbar-actions">
+            <button id="searchBtn" class="icon-btn" type="button" aria-label="Search groups">⌕</button>
+            <button
+              id="sidebarToggleBtn"
+              class="icon-btn active"
+              type="button"
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar"
+            >
+              ◧
+            </button>
           </div>
-        </div>
-
-        <div class="session-area">
-          <input id="usernameInput" type="text" placeholder="Your name" maxlength="32" />
-          <button id="saveNameBtn" class="btn-secondary" type="button">Save</button>
-        </div>
-
-        <div class="search-wrap">
-          <input id="searchInput" type="text" placeholder="Search conversations..." />
         </div>
 
         <form id="createGroupForm" class="inline-form">
-          <input id="groupNameInput" type="text" placeholder="New group name" required />
-          <button class="btn-primary" type="submit">Create Group</button>
+          <button class="new-group-btn" type="submit">
+            <span class="new-group-icon">✎</span>
+            <span>New Group</span>
+          </button>
         </form>
 
-        <ul id="groupList" class="group-list"></ul>
-
-        <div class="profile-card">
-          <div class="avatar">ME</div>
-          <div>
-            <p id="profileName">You</p>
-            <span>Online</span>
-          </div>
-        </div>
+        <ul id="groupList" class="group-list nav-list"></ul>
       </aside>
 
       <section class="chat-area">
         <div class="chat-header glass-card">
-          <div>
-            <h2 id="activeGroupTitle">Select a conversation</h2>
-            <p id="activeGroupSubtext">Choose a group to start chatting</p>
-          </div>
-          <div class="chat-actions">
-            <button id="copyInviteBtn" class="btn-secondary" type="button" disabled>Copy Invite Link</button>
-            <button id="leaveGroupBtn" class="btn-danger" type="button" disabled>Leave Group</button>
+          <div class="chat-header-main">
+            <div class="chat-header-text">
+              <h2 id="activeGroupTitle">Select a conversation</h2>
+              <p id="activeGroupSubtext">Choose a group to start chatting</p>
+            </div>
+            <div class="chat-actions">
+              <button id="addPersonBtn" class="btn-secondary" type="button" disabled>Add Person</button>
+              <button id="addAiModalBtn" class="btn-secondary" type="button" disabled>Add AIs</button>
+            </div>
           </div>
         </div>
 
         <div id="messageList" class="messages glass-card"></div>
+        <div id="typingStatus" class="typing-status hidden"></div>
 
         <form id="messageForm" class="message-form glass-card hidden">
           <input id="messageInput" type="text" maxlength="4000" placeholder="Type message..." required />
@@ -74,12 +68,46 @@
         </form>
       </section>
 
-      <aside class="sidebar right-sidebar">
-        <div class="panel-header">
-          <h3>AI Companions</h3>
-          <span class="chip">Live</span>
-        </div>
+    </div>
 
+    <div id="profileModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <div class="modal-card">
+        <h3>Profile Settings</h3>
+        <form id="profileForm" class="profile-form">
+          <label>
+            Display Name
+            <input id="profileNameInput" type="text" maxlength="32" placeholder="Your name" required />
+          </label>
+          <label>
+            Avatar URL (optional)
+            <input id="profileAvatarInput" type="url" placeholder="https://..." />
+          </label>
+          <div class="modal-actions">
+            <button id="cancelProfileBtn" class="btn-secondary" type="button">Cancel</button>
+            <button class="btn-primary" type="submit">Save Profile</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="dialogModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-dialog="true"></div>
+      <div class="modal-card">
+        <h3 id="dialogTitle">Dialog</h3>
+        <p id="dialogMessage" class="dialog-message"></p>
+        <input id="dialogInput" class="hidden" type="text" />
+        <div class="modal-actions">
+          <button id="dialogCancelBtn" class="btn-secondary" type="button">Cancel</button>
+          <button id="dialogConfirmBtn" class="btn-primary" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="aiModal" class="modal hidden">
+      <div class="modal-backdrop" data-close-ai-modal="true"></div>
+      <div class="modal-card">
+        <h3>Add AI Companion</h3>
         <form id="addAiForm" class="ai-form">
           <input id="aiNameInput" type="text" placeholder="AI name" required />
           <textarea id="aiPersonaInput" placeholder="Persona (how this AI behaves)" required></textarea>
@@ -93,19 +121,12 @@
             Temperature
             <input id="aiTemperatureInput" type="number" min="0" max="2" step="0.1" value="1" />
           </label>
-          <label>
-            Reply delay (ms)
-            <input id="aiDelayInput" type="number" min="0" max="15000" step="250" value="1500" />
-          </label>
-          <button id="addAiBtn" class="btn-primary" type="submit" disabled>Add AI to selected group</button>
+          <div class="modal-actions">
+            <button id="cancelAiModalBtn" class="btn-secondary" type="button">Close</button>
+            <button id="addAiBtn" class="btn-primary" type="submit" disabled>Add AI</button>
+          </div>
         </form>
-
-        <ul id="aiMemberList" class="ai-member-list"></ul>
-        <div class="tip-card">
-          <strong>Pro Tip</strong>
-          <p>Add multiple AI companions with different specialties for diverse perspectives.</p>
-        </div>
-      </aside>
+      </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
