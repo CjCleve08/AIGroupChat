@@ -75,6 +75,65 @@ body {
   line-height: 1.5;
 }
 
+.sign-in-divider {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.sign-in-email-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.sign-in-email-form input {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--glass-light);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.sign-in-email-form input::placeholder {
+  color: var(--muted);
+}
+
+.sign-in-email-form input:focus {
+  outline: none;
+  border-color: var(--purple);
+}
+
+.mfa-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mfa-prompt label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.btn-text:hover {
+  color: var(--text);
+}
+
+.btn-google {
+  margin-top: 0;
+}
+
 .ambient {
   position: fixed;
   border-radius: 999px;

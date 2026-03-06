@@ -20,8 +20,30 @@
       <div class="sign-in-card glass-card">
         <div class="sign-in-logo">✷</div>
         <h1>AI Group Chat</h1>
-        <p>Sign in with Google to access your groups, messages, and AI companions.</p>
-        <button id="googleSignInBtn" class="btn-primary" type="button">Continue with Google</button>
+        <p>Sign in to access your groups, messages, and AI companions.</p>
+
+        <div class="sign-in-divider">or</div>
+
+        <form id="emailSignInForm" class="sign-in-email-form">
+          <input id="emailInput" type="email" placeholder="Email" required autocomplete="email" />
+          <input id="passwordInput" type="password" placeholder="Password" required autocomplete="current-password" />
+          <div id="mfaPrompt" class="mfa-prompt hidden">
+            <label for="mfaCodeInput">Verification code from your authenticator app</label>
+            <input id="mfaCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="000000" autocomplete="one-time-code" />
+          </div>
+          <button id="emailSignInBtn" class="btn-primary" type="submit">Sign in</button>
+          <button id="switchToSignUpBtn" class="btn-text" type="button">Create an account</button>
+        </form>
+
+        <form id="emailSignUpForm" class="sign-in-email-form hidden">
+          <input id="signUpEmailInput" type="email" placeholder="Email" required autocomplete="email" />
+          <input id="signUpPasswordInput" type="password" placeholder="Password (min 6 characters)" required autocomplete="new-password" minlength="6" />
+          <button id="emailSignUpBtn" class="btn-primary" type="submit">Create account</button>
+          <button id="switchToSignInBtn" class="btn-text" type="button">Already have an account? Sign in</button>
+        </form>
+
+        <div class="sign-in-divider">or</div>
+        <button id="googleSignInBtn" class="btn-primary btn-google" type="button">Continue with Google</button>
       </div>
     </section>
 

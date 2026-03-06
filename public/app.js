@@ -4,6 +4,10 @@ import {
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  getMultiFactorResolver,
+  TotpMultiFactorGenerator,
   signOut,
   updateProfile
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
@@ -14,6 +18,14 @@ const ui = {
   appShell: document.getElementById("appShell"),
   signInScreen: document.getElementById("signInScreen"),
   googleSignInBtn: document.getElementById("googleSignInBtn"),
+  emailSignInForm: document.getElementById("emailSignInForm"),
+  emailInput: document.getElementById("emailInput"),
+  passwordInput: document.getElementById("passwordInput"),
+  mfaPrompt: document.getElementById("mfaPrompt"),
+  mfaCodeInput: document.getElementById("mfaCodeInput"),
+  emailSignUpForm: document.getElementById("emailSignUpForm"),
+  signUpEmailInput: document.getElementById("signUpEmailInput"),
+  signUpPasswordInput: document.getElementById("signUpPasswordInput"),
   profileBtn: document.getElementById("profileBtn"),
   searchBtn: document.getElementById("searchBtn"),
   sidebarToggleBtn: document.getElementById("sidebarToggleBtn"),
@@ -60,6 +72,7 @@ const ui = {
 
 let firebaseAuth = null;
 let authProvider = null;
+let pendingMfaResolver = null;
 let currentUserId = "";
 let currentUsername = "";
 let currentAvatarUrl = "";
@@ -79,6 +92,31 @@ setAuthUiVisibility(false);
 
 ui.googleSignInBtn?.addEventListener("click", async () => {
   await startGoogleSignIn();
+});
+
+ui.switchToSignUpBtn = document.getElementById("switchToSignUpBtn");
+ui.switchToSignInBtn = document.getElementById("switchToSignInBtn");
+
+ui.switchToSignUpBtn?.addEventListener("click", () => {
+  ui.emailSignInForm?.classList.add("hidden");
+  ui.emailSignUpForm?.classList.remove("hidden");
+  resetMfaState();
+});
+
+ui.switchToSignInBtn?.addEventListener("click", () => {
+  ui.emailSignUpForm?.classList.add("hidden");
+  ui.emailSignInForm?.classList.remove("hidden");
+  resetMfaState();
+});
+
+ui.emailSignInForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await handleEmailSignIn();
+});
+
+ui.emailSignUpForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await handleEmailSignUp();
 });
 
 ui.profileBtn?.addEventListener("click", () => {
@@ -1013,6 +1051,7 @@ async function initAuthAndData() {
 
     onAuthStateChanged(firebaseAuth, async (user) => {
       if (!user) {
+        resetMfaState();
         currentUserId = "";
         currentUsername = "";
         currentAvatarUrl = "";
@@ -1065,11 +1104,133 @@ async function initAuthAndData() {
   }
 }
 
+function resetMfaState() {
+  pendingMfaResolver = null;
+  ui.mfaPrompt?.classList.add("hidden");
+  if (ui.mfaCodeInput) ui.mfaCodeInput.value = "";
+  const submitBtn = ui.emailSignInForm?.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.textContent = "Sign in";
+}
+
+async function handleEmailSignIn() {
+  if (!firebaseAuth) return;
+  if (pendingMfaResolver) {
+    await handleMfaVerification();
+    return;
+  }
+  const email = String(ui.emailInput?.value || "").trim();
+  const password = String(ui.passwordInput?.value || "");
+  if (!email || !password) return;
+  const btn = ui.emailSignInForm?.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    await signInWithEmailAndPassword(firebaseAuth, email, password);
+    resetMfaState();
+  } catch (error) {
+    if (error?.code === "auth/multi-factor-auth-required") {
+      pendingMfaResolver = getMultiFactorResolver(firebaseAuth, error);
+      const totpHint = pendingMfaResolver.hints?.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID);
+      if (totpHint) {
+        ui.mfaPrompt?.classList.remove("hidden");
+        ui.mfaCodeInput?.focus();
+        const submitBtn = ui.emailSignInForm?.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.textContent = "Verify";
+      } else {
+        await showDialog({
+          title: "2FA Required",
+          message: "Your account uses a second factor not supported here (e.g. SMS). Please use Google sign-in or an authenticator app if you have TOTP enabled.",
+          mode: "alert",
+          confirmText: "OK"
+        });
+        pendingMfaResolver = null;
+      }
+    } else {
+      await showDialog({
+        title: "Sign In Failed",
+        message: error?.message || "Invalid email or password.",
+        mode: "alert",
+        confirmText: "OK"
+      });
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleMfaVerification() {
+  if (!pendingMfaResolver) return;
+  const code = String(ui.mfaCodeInput?.value || "").replace(/\D/g, "");
+  if (!code || code.length < 6) {
+    await showDialog({
+      title: "Invalid Code",
+      message: "Please enter the 6-digit code from your authenticator app.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+    return;
+  }
+  const totpHint = pendingMfaResolver.hints?.find((h) => h.factorId === TotpMultiFactorGenerator.FACTOR_ID);
+  if (!totpHint) {
+    resetMfaState();
+    return;
+  }
+  const btn = ui.emailSignInForm?.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    const assertion = TotpMultiFactorGenerator.assertionForSignIn(totpHint.uid, code);
+    await pendingMfaResolver.resolveSignIn(assertion);
+    resetMfaState();
+  } catch (error) {
+    await showDialog({
+      title: "Verification Failed",
+      message: error?.message || "Invalid or expired code. Please try again.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleEmailSignUp() {
+  if (!firebaseAuth) return;
+  const email = String(ui.signUpEmailInput?.value || "").trim();
+  const password = String(ui.signUpPasswordInput?.value || "");
+  if (!email || !password || password.length < 6) {
+    await showDialog({
+      title: "Invalid Input",
+      message: "Email and password (min 6 characters) are required.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+    return;
+  }
+  const btn = ui.emailSignUpForm?.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    await createUserWithEmailAndPassword(firebaseAuth, email, password);
+    ui.emailSignUpForm?.classList.add("hidden");
+    ui.emailSignInForm?.classList.remove("hidden");
+    ui.emailInput.value = email;
+    ui.passwordInput.value = "";
+  } catch (error) {
+    await showDialog({
+      title: "Sign Up Failed",
+      message: error?.message || "Unable to create account.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function startGoogleSignIn() {
   if (!firebaseAuth || !authProvider) return;
   if (ui.googleSignInBtn) ui.googleSignInBtn.disabled = true;
   try {
     await signInWithPopup(firebaseAuth, authProvider);
+    resetMfaState();
   } catch (error) {
     await showDialog({
       title: "Sign In Failed",
