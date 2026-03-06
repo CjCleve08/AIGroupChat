@@ -45,12 +45,15 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+const OPENROUTER_TIMEOUT_MS = 55000;
+
 app.post("/api/generate-personality", requireAuth, wrapAsync(async (req, res) => {
   if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.startsWith("your_")) {
     return res.status(503).json({ error: "AI not configured" });
   }
   const name = String(req.body?.name || "").trim();
   const description = String(req.body?.description || "").trim();
+  const model = String(req.body?.model || "").trim() || OPENROUTER_ROUTER_MODEL;
   if (!name) return res.status(400).json({ error: "name is required" });
 
   const prompt = [
@@ -65,15 +68,28 @@ app.post("/api/generate-personality", requireAuth, wrapAsync(async (req, res) =>
     "persona (one sentence overall description for the AI)"
   ].join("\n");
 
-  const raw = await requestOpenRouterCompletion({
-    model: OPENROUTER_ROUTER_MODEL,
-    temperature: 0.8,
-    prompt
-  });
+  let raw;
+  try {
+    raw = await requestOpenRouterCompletion({
+      model,
+      temperature: 0.8,
+      prompt,
+      timeoutMs: OPENROUTER_TIMEOUT_MS
+    });
+  } catch (err) {
+    console.error("generate-personality OpenRouter error:", err?.message || err);
+    return res.status(503).json({
+      error: err?.message?.includes("timeout") || err?.name === "AbortError"
+        ? "AI request timed out. Try again."
+        : "AI service unavailable. Try again later."
+    });
+  }
 
   const parsed = parseGeneratedPersonality(raw);
   if (!parsed) {
-    return res.status(502).json({ error: "Could not generate personality" });
+    return res.status(503).json({
+      error: "Could not generate personality. Try again or fill in the fields manually."
+    });
   }
   res.json(parsed);
 }));
@@ -1059,31 +1075,51 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function requestOpenRouterCompletion({ model, temperature, prompt }) {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": OPENROUTER_SITE_URL,
-      "X-Title": OPENROUTER_SITE_NAME
-    },
-    body: JSON.stringify({
-      model,
-      temperature,
-      messages: [{ role: "user", content: prompt }]
-    })
-  });
+async function requestOpenRouterCompletion({ model, temperature, prompt, timeoutMs = 60000 }) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_SITE_URL,
+        "X-Title": OPENROUTER_SITE_NAME
+      },
+      body: JSON.stringify({
+        model,
+        temperature,
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+    clearTimeout(timeoutId);
 
-  if (!response.ok) {
-    const body = await safeText(response);
-    console.error("OpenRouter request failed:", response.status, body);
-    return "";
+    if (!response.ok) {
+      const body = await safeText(response);
+      console.error("OpenRouter request failed:", response.status, body);
+      return "";
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (_parseErr) {
+      console.error("OpenRouter response JSON parse failed");
+      return "";
+    }
+    const content = data?.choices?.[0]?.message?.content ?? "";
+    return typeof content === "string" ? content.trim() : "";
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err?.name === "AbortError") {
+      const e = new Error("OpenRouter request timed out");
+      e.name = "AbortError";
+      throw e;
+    }
+    throw err;
   }
-
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content ?? "";
-  return typeof content === "string" ? content.trim() : "";
 }
 
 function clampNumber(value, min, max, fallback) {

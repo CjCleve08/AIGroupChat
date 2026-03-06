@@ -285,11 +285,12 @@ ui.generatePersonalityBtn?.addEventListener("click", async () => {
     return;
   }
   const description = ui.aiDescriptionInput?.value?.trim() || "";
+  const model = (ui.aiModelInput?.value || "").trim() || "openai/gpt-4o-mini";
   if (ui.generatePersonalityBtn) ui.generatePersonalityBtn.disabled = true;
   try {
     const data = await api("/api/generate-personality", {
       method: "POST",
-      body: JSON.stringify({ name, description })
+      body: JSON.stringify({ name, description, model })
     });
     if (data.personality && ui.aiPersonalityInput) ui.aiPersonalityInput.value = data.personality;
     if (data.textingStyle && ui.aiTextingStyleInput) ui.aiTextingStyleInput.value = data.textingStyle;
