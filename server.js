@@ -593,9 +593,9 @@ function shouldAiReply(aiMember, latestMessage, recentMessages) {
   if (!name) return false;
   const text = String(latestMessage?.text || "").toLowerCase();
   const mentioned = new RegExp(`\\b${escapeRegExp(name)}\\b`).test(text);
-  if (mentioned) return Math.random() < 0.9;
-  if (latestMessage?.senderType === "ai") return Math.random() < 0.15;
-  return Math.random() < 0.3;
+  if (mentioned) return Math.random() < 0.95;
+  if (latestMessage?.senderType === "ai") return Math.random() < 0.45;
+  return Math.random() < 0.55;
 }
 
 function buildCharacterCardPrompt(aiMember, context, latestMessage) {
@@ -615,25 +615,25 @@ function buildCharacterCardPrompt(aiMember, context, latestMessage) {
     "Keep responses short, like real texting.",
     "",
     "Write like a real person texting friends (e.g. teenager or friend group).",
-    "Use lowercase sometimes; keep messages short; use occasional slang; sometimes send a single word or two.",
-    "Do not sound like an assistant; do not explain things; do not be overly polite like customer support.",
+    "Use lowercase sometimes. Keep messages short. Use occasional slang. Sometimes send a single word or two.",
+    "Do not sound like an assistant. Do not explain things. Do not be polite like customer support.",
+    "Use emojis rarely if at all; most real texts don't have emojis in every message.",
     "",
-    "Good examples: bro what 😭 / no way / wait fr?? / lmao / thats wild",
-    "Bad (avoid): That's interesting! How was your day today?",
+    "Good: bro what / no way / wait fr?? / lmao / thats wild / nah / rip",
+    "Bad (avoid): That's interesting! How was your day today? I'd be happy to help! That's a great question!",
     "",
     "Rules:",
-    "- Reply naturally and conversationally.",
-    "- Keep to 1-4 sentences unless more detail is requested.",
-    "- Stay in-character.",
-    "- You can agree, disagree, or challenge points respectfully when it fits.",
-    "- You may reply to humans or other AI participants like a normal group member.",
+    "- Reply naturally and conversationally. Stay in character.",
+    "- Keep to 1-4 sentences unless more is needed.",
+    "- You can agree, disagree, or challenge when it fits.",
+    "- Reply to humans or other AI like a normal group member.",
     "",
     "Recent conversation:",
     context,
     "",
     `Latest message from ${latestMessage.senderName}: ${latestMessage.text}`,
     "",
-    "Return only your next reply message."
+    "Return only your next reply as plain text, nothing else."
   ];
 
   if (hasCard) {
@@ -699,10 +699,15 @@ async function triggerAiReplies(groupId, latestMessage, options = {}) {
   const fallbackCandidates = aiMembers.filter(
     (ai) => !excludedSet.has(String(ai.name || "").toLowerCase().trim())
   );
-  const fallbackResponders =
-    !responders.length && latestMessage.senderType === "ai"
-      ? chooseFallbackAiResponders(fallbackCandidates, latestMessage.senderName, latestMessage.text)
-      : [];
+  let fallbackResponders = [];
+  if (!responders.length) {
+    if (latestMessage.senderType === "ai") {
+      fallbackResponders = chooseFallbackAiResponders(fallbackCandidates, latestMessage.senderName, latestMessage.text);
+    } else if (fallbackCandidates.length && Math.random() < 0.5) {
+      const idx = Math.floor(Math.random() * fallbackCandidates.length);
+      fallbackResponders = [fallbackCandidates[idx]];
+    }
+  }
   let activeResponders = responders.length ? responders : fallbackResponders;
   activeResponders = activeResponders.filter((ai) =>
     shouldAiReply(ai, latestMessage, recentMessages)
@@ -843,13 +848,13 @@ async function selectRespondingAiMembers({
     "You are selecting which chat companions should reply to a new message.",
     "Return JSON only, with format: {\"responders\":[\"Name1\",\"Name2\"]}",
     "Rules:",
-    "- Choose only members who should naturally respond now.",
+    "- When the message is a question, joke, story, or something that needs a reaction, include at least one responder. When in doubt, include 1 responder so the chat feels active.",
+    "- Include anyone who would naturally react (laugh, be surprised, agree, disagree, or have something to add).",
     "- If a specific AI is directly addressed by name, include that AI.",
     "- If the latest sender is AI and the message contains a claim/question/opinion/disagreement, select at least one OTHER AI responder.",
     "- Prefer responders with a different perspective or useful additional context.",
-    "- It is valid to return an empty array if no AI should respond.",
-    "- Prefer 0-2 responders unless more are clearly needed.",
-    "- Use names exactly as listed.",
+    "- It is valid to return an empty array only when the message clearly needs no reaction from anyone.",
+    "- Prefer 1-2 responders. Use names exactly as listed.",
     "",
     `Latest sender type: ${latestSenderType}`,
     `Latest sender: ${latestSender}`,
@@ -889,7 +894,7 @@ function chooseFallbackAiResponders(aiMembers, latestSender, latestText) {
   if (!candidates.length) return [];
 
   const signal = getContinuationSignal(latestText, candidates);
-  const continueChance = signal.strong ? 0.98 : signal.medium ? 0.78 : 0.22;
+  const continueChance = signal.strong ? 0.98 : signal.medium ? 0.88 : 0.45;
   if (Math.random() > continueChance) return [];
 
   // If strong signal, sometimes allow two AIs to keep momentum.
@@ -915,10 +920,11 @@ function getContinuationSignal(latestText, candidates) {
   const question = /[?]/.test(text);
   const disagreement = /\b(but|however|disagree|wrong|actually|no,|not really|counterpoint)\b/i.test(text);
   const opinionOrClaim = /\b(i think|i believe|in my view|should|must|best|because|therefore)\b/i.test(text);
-  const longPoint = text.length > 120;
+  const longPoint = text.length > 80;
+  const hasReactionHook = /\b(lol|omg|haha|wtf|bruh|damn|wild|crazy|same|fr|right)\b/i.test(text) || /[!.]$/.test(text);
 
   const strong = mentionsOtherAi || question || disagreement || (opinionOrClaim && longPoint);
-  const medium = opinionOrClaim || longPoint;
+  const medium = opinionOrClaim || longPoint || hasReactionHook;
   return { strong, medium };
 }
 
