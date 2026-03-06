@@ -125,7 +125,34 @@
         <h3>Add AI Companion</h3>
         <form id="addAiForm" class="ai-form">
           <input id="aiNameInput" type="text" placeholder="AI name" required />
-          <textarea id="aiPersonaInput" placeholder="Persona (how this AI behaves)" required></textarea>
+          <label>
+            Short description (optional, for AI-generated personality)
+            <input id="aiDescriptionInput" type="text" placeholder="e.g. a chill gamer who roasts friends" />
+          </label>
+          <div class="modal-actions generate-personality-actions">
+            <button id="generatePersonalityBtn" class="btn-secondary" type="button">Generate personality with AI</button>
+          </div>
+          <textarea id="aiPersonaInput" placeholder="Persona (general description, or use character card below)"></textarea>
+          <label>
+            Personality
+            <input id="aiPersonalityInput" type="text" placeholder="e.g. sarcastic, funny, rarely serious" />
+          </label>
+          <label>
+            Texting style
+            <input id="aiTextingStyleInput" type="text" placeholder="e.g. lowercase, short messages, uses lol and bro" />
+          </label>
+          <label>
+            Group role
+            <input id="aiGroupRoleInput" type="text" placeholder="e.g. the instigator who makes jokes" />
+          </label>
+          <label>
+            Rules (one per line or semicolon-separated)
+            <textarea id="aiRulesInput" placeholder="e.g. rarely more than 1 sentence; sometimes ignores messages"></textarea>
+          </label>
+          <label>
+            Relationships (optional, how you act with specific people)
+            <input id="aiRelationshipsInput" type="text" placeholder="e.g. roasts Tyler, agrees with Emma, competes with Ryan" />
+          </label>
           <input
             id="aiModelInput"
             type="text"

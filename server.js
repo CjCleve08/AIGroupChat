@@ -23,8 +23,6 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENROUTER_SITE_URL = process.env.OPENROUTER_SITE_URL || "";
 const OPENROUTER_SITE_NAME = process.env.OPENROUTER_SITE_NAME || "AI Group Chat";
 const OPENROUTER_ROUTER_MODEL = process.env.OPENROUTER_ROUTER_MODEL || "openai/gpt-4o-mini";
-const MAX_AI_CHAIN_TURNS = clampNumber(process.env.MAX_AI_CHAIN_TURNS, 1, 12, 4);
-
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -46,6 +44,69 @@ app.get("/api/health", (_req, res) => {
     firebaseConfigured: Boolean(process.env.FIREBASE_PROJECT_ID)
   });
 });
+
+app.post("/api/generate-personality", requireAuth, wrapAsync(async (req, res) => {
+  if (!OPENROUTER_API_KEY || OPENROUTER_API_KEY.startsWith("your_")) {
+    return res.status(503).json({ error: "AI not configured" });
+  }
+  const name = String(req.body?.name || "").trim();
+  const description = String(req.body?.description || "").trim();
+  if (!name) return res.status(400).json({ error: "name is required" });
+
+  const prompt = [
+    "Generate a group-chat character card for someone named \"" + name + "\".",
+    description ? "User description: " + description : "Invent a distinct, believable personality.",
+    "",
+    "Return ONLY a JSON object with these exact keys (short strings, no newlines inside values):",
+    "personality (e.g. sarcastic, funny, rarely serious)",
+    "textingStyle (e.g. lowercase, short messages, uses lol and bro)",
+    "groupRole (e.g. the instigator who makes jokes)",
+    "rules (semicolon-separated, e.g. rarely more than 1 sentence; sometimes ignores messages)",
+    "persona (one sentence overall description for the AI)"
+  ].join("\n");
+
+  const raw = await requestOpenRouterCompletion({
+    model: OPENROUTER_ROUTER_MODEL,
+    temperature: 0.8,
+    prompt
+  });
+
+  const parsed = parseGeneratedPersonality(raw);
+  if (!parsed) {
+    return res.status(502).json({ error: "Could not generate personality" });
+  }
+  res.json(parsed);
+}));
+
+function parseGeneratedPersonality(raw) {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  try {
+    const json = JSON.parse(trimmed);
+    return {
+      personality: String(json.personality || "").trim().slice(0, 400),
+      textingStyle: String(json.textingStyle || "").trim().slice(0, 400),
+      groupRole: String(json.groupRole || "").trim().slice(0, 200),
+      rules: String(json.rules || "").trim().slice(0, 800),
+      persona: String(json.persona || "").trim().slice(0, 500)
+    };
+  } catch (_e) {
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const json = JSON.parse(match[0]);
+        return {
+          personality: String(json.personality || "").trim().slice(0, 400),
+          textingStyle: String(json.textingStyle || "").trim().slice(0, 400),
+          groupRole: String(json.groupRole || "").trim().slice(0, 200),
+          rules: String(json.rules || "").trim().slice(0, 800),
+          persona: String(json.persona || "").trim().slice(0, 500)
+        };
+      } catch (_e2) {}
+    }
+  }
+  return null;
+}
 
 app.get("/api/groups", requireAuth, wrapAsync(async (req, res) => {
   const snapshot = await groupsCollection()
@@ -339,7 +400,7 @@ app.post("/api/groups/:groupId/messages", requireAuth, wrapAsync(async (req, res
   });
 
   emitGroupMessage(groupId, message);
-  triggerAiReplies(groupId, message, { turnsRemaining: MAX_AI_CHAIN_TURNS }).catch((error) => {
+  triggerAiReplies(groupId, message, { turnsRemaining: 2 }).catch((error) => {
     console.error("AI reply generation failed:", error);
   });
 
@@ -364,10 +425,18 @@ app.post("/api/groups/:groupId/ai-members", requireAuth, wrapAsync(async (req, r
 
   const name = String(req.body?.name || "").trim();
   const persona = String(req.body?.persona || "").trim();
+  const personality = String(req.body?.personality || "").trim();
+  const textingStyle = String(req.body?.textingStyle || "").trim();
+  const groupRole = String(req.body?.groupRole || "").trim();
+  const rules = String(req.body?.rules || "").trim();
+  const relationships = String(req.body?.relationships || "").trim();
   const model = String(req.body?.model || "").trim() || "openai/gpt-4o-mini";
   const temperature = clampNumber(req.body?.temperature, 0, 2, 1);
-  if (!name || !persona || !model) {
-    return res.status(400).json({ error: "name, persona, and model are required" });
+  if (!name || !model) {
+    return res.status(400).json({ error: "name and model are required" });
+  }
+  if (!persona && !personality) {
+    return res.status(400).json({ error: "persona or personality is required" });
   }
 
   const nowMs = Date.now();
@@ -375,6 +444,11 @@ app.post("/api/groups/:groupId/ai-members", requireAuth, wrapAsync(async (req, r
     id: randomUUID(),
     name: name.slice(0, 40),
     persona: persona.slice(0, 1600),
+    personality: personality.slice(0, 400),
+    textingStyle: textingStyle.slice(0, 400),
+    groupRole: groupRole.slice(0, 200),
+    rules: rules.slice(0, 800),
+    relationships: relationships.slice(0, 400),
     model,
     temperature,
     createdAt: new Date(nowMs).toISOString(),
@@ -514,21 +588,105 @@ function wrapAsync(handler) {
   };
 }
 
+function shouldAiReply(aiMember, latestMessage, recentMessages) {
+  const name = String(aiMember?.name || "").trim().toLowerCase();
+  if (!name) return false;
+  const text = String(latestMessage?.text || "").toLowerCase();
+  const mentioned = new RegExp(`\\b${escapeRegExp(name)}\\b`).test(text);
+  if (mentioned) return Math.random() < 0.9;
+  if (latestMessage?.senderType === "ai") return Math.random() < 0.15;
+  return Math.random() < 0.3;
+}
+
+function buildCharacterCardPrompt(aiMember, context, latestMessage) {
+  const name = aiMember.name || "AI";
+  const hasCard =
+    aiMember.personality ||
+    aiMember.textingStyle ||
+    aiMember.groupRole ||
+    aiMember.rules ||
+    aiMember.relationships;
+  const parts = [
+    `You are "${name}" in a private friend group chat.`,
+    "",
+    "You are NOT an AI assistant. You are a normal person in a group chat with friends.",
+    "Do not be overly helpful. Do not answer everything.",
+    "Sometimes ignore messages; sometimes change the subject.",
+    "Keep responses short, like real texting.",
+    "",
+    "Write like a real person texting friends (e.g. teenager or friend group).",
+    "Use lowercase sometimes; keep messages short; use occasional slang; sometimes send a single word or two.",
+    "Do not sound like an assistant; do not explain things; do not be overly polite like customer support.",
+    "",
+    "Good examples: bro what 😭 / no way / wait fr?? / lmao / thats wild",
+    "Bad (avoid): That's interesting! How was your day today?",
+    "",
+    "Rules:",
+    "- Reply naturally and conversationally.",
+    "- Keep to 1-4 sentences unless more detail is requested.",
+    "- Stay in-character.",
+    "- You can agree, disagree, or challenge points respectfully when it fits.",
+    "- You may reply to humans or other AI participants like a normal group member.",
+    "",
+    "Recent conversation:",
+    context,
+    "",
+    `Latest message from ${latestMessage.senderName}: ${latestMessage.text}`,
+    "",
+    "Return only your next reply message."
+  ];
+
+  if (hasCard) {
+    const card = [];
+    if (aiMember.personality) card.push(`Personality: ${aiMember.personality}`);
+    if (aiMember.textingStyle) card.push(`Texting style: ${aiMember.textingStyle}`);
+    if (aiMember.groupRole) card.push(`Group role: ${aiMember.groupRole}`);
+    if (aiMember.rules) card.push(`Your rules:\n${aiMember.rules}`);
+    if (aiMember.relationships) card.push(`Your relationships / how you act with others: ${aiMember.relationships}`);
+    parts.splice(
+      2,
+      0,
+      "Character card:",
+      card.join("\n"),
+      ""
+    );
+  } else if (aiMember.persona) {
+    parts.splice(2, 0, "Persona:", aiMember.persona, "");
+  }
+
+  return parts.join("\n");
+}
+
 async function triggerAiReplies(groupId, latestMessage, options = {}) {
   if (!OPENROUTER_API_KEY) return;
   const turnsRemaining = Number(options.turnsRemaining || 0);
   if (turnsRemaining <= 0) return;
 
-  const [group, aiMembers, recentMessages] = await Promise.all([
+  const [group, aiMembers, recentMessages, humanMembers] = await Promise.all([
     getGroup(groupId),
     listAiMembers(groupId),
-    listRecentMessages(groupId, 30)
+    listRecentMessages(groupId, 30),
+    listMembers(groupId)
   ]);
   if (!group || !aiMembers.length) return;
 
-  const context = recentMessages
+  const humanNames = (humanMembers || []).map((m) => m.name).filter(Boolean);
+  const aiNames = (aiMembers || []).map((a) => a.name).filter(Boolean);
+  const memberList = [...humanNames, ...aiNames].join(", ") || "unknown";
+  const conversationContext = recentMessages
     .map((m) => `${m.senderName} [${m.senderType}]: ${m.text}`)
     .join("\n");
+  const context = `Group chat members: ${memberList}\n\nRecent conversation:\n${conversationContext}`;
+
+  const lastTwoAiSenders = recentMessages
+    .slice(-2)
+    .filter((m) => m.senderType === "ai")
+    .map((m) => m.senderName);
+  const excludedNames =
+    latestMessage.senderType === "ai"
+      ? [...new Set([latestMessage.senderName, ...lastTwoAiSenders])]
+      : lastTwoAiSenders;
+  const excludedSet = new Set(excludedNames.map((n) => String(n).toLowerCase().trim()));
 
   const responders = await selectRespondingAiMembers({
     aiMembers,
@@ -536,37 +694,29 @@ async function triggerAiReplies(groupId, latestMessage, options = {}) {
     latestMessage: latestMessage.text,
     latestSender: latestMessage.senderName,
     latestSenderType: latestMessage.senderType,
-    excludedNames: latestMessage.senderType === "ai" ? [latestMessage.senderName] : []
+    excludedNames
   });
+  const fallbackCandidates = aiMembers.filter(
+    (ai) => !excludedSet.has(String(ai.name || "").toLowerCase().trim())
+  );
   const fallbackResponders =
     !responders.length && latestMessage.senderType === "ai"
-      ? chooseFallbackAiResponders(aiMembers, latestMessage.senderName, latestMessage.text)
+      ? chooseFallbackAiResponders(fallbackCandidates, latestMessage.senderName, latestMessage.text)
       : [];
-  const activeResponders = responders.length ? responders : fallbackResponders;
+  let activeResponders = responders.length ? responders : fallbackResponders;
+  activeResponders = activeResponders.filter((ai) =>
+    shouldAiReply(ai, latestMessage, recentMessages)
+  );
+  if (activeResponders.length > 2) {
+    const shuffled = [...activeResponders].sort(() => Math.random() - 0.5);
+    activeResponders = shuffled.slice(0, 2);
+  }
   if (!activeResponders.length) return;
 
   let lastAiMessage = null;
   await Promise.all(
     activeResponders.map(async (aiMember) => {
-      const prompt = [
-        `You are "${aiMember.name}" in a private friend group chat.`,
-        "You are an AI roleplaying as a normal participant with this persona:",
-        aiMember.persona,
-        "",
-        "Rules:",
-        "- Reply naturally and conversationally.",
-        "- Keep to 1-4 sentences unless more detail is requested.",
-        "- Stay in-character.",
-        "- You can agree, disagree, or challenge points respectfully when it fits.",
-        "- You may reply to humans or other AI participants like a normal group member.",
-        "",
-        "Recent conversation:",
-        context,
-        "",
-        `Latest message from ${latestMessage.senderName}: ${latestMessage.text}`,
-        "",
-        "Return only your next reply message."
-      ].join("\n");
+      const prompt = buildCharacterCardPrompt(aiMember, context, latestMessage);
 
       const reply = await requestOpenRouterCompletion({
         model: aiMember.model,

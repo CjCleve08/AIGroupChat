@@ -644,6 +644,15 @@ button:disabled {
   font-size: 12px;
 }
 
+.modal-card .ai-form {
+  gap: 6px;
+}
+
+.modal-card .ai-form textarea {
+  min-height: 56px;
+  resize: vertical;
+}
+
 .ai-member-list li {
   background: rgba(30, 41, 59, 0.35);
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -718,6 +727,11 @@ body.sidebar-collapsed .left-sidebar .profile-card {
   position: fixed;
   inset: 0;
   z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow-y: auto;
 }
 
 .modal-backdrop {
@@ -729,11 +743,13 @@ body.sidebar-collapsed .left-sidebar .profile-card {
 .modal-card {
   position: relative;
   width: min(430px, calc(100% - 24px));
-  margin: 9vh auto 0;
+  max-height: calc(100vh - 32px);
+  margin: auto;
   background: rgba(15, 23, 42, 0.96);
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 16px;
   padding: 16px;
+  overflow-y: auto;
 }
 
 .modal-card h3 {
@@ -759,6 +775,10 @@ body.sidebar-collapsed .left-sidebar .profile-card {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
+}
+
+.generate-personality-actions {
+  justify-content: flex-start;
 }
 
 .dialog-message {

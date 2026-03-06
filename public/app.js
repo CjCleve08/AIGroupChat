@@ -33,7 +33,14 @@ const ui = {
   addAiForm: document.getElementById("addAiForm"),
   addAiBtn: document.getElementById("addAiBtn"),
   aiNameInput: document.getElementById("aiNameInput"),
+  aiDescriptionInput: document.getElementById("aiDescriptionInput"),
+  generatePersonalityBtn: document.getElementById("generatePersonalityBtn"),
   aiPersonaInput: document.getElementById("aiPersonaInput"),
+  aiPersonalityInput: document.getElementById("aiPersonalityInput"),
+  aiTextingStyleInput: document.getElementById("aiTextingStyleInput"),
+  aiGroupRoleInput: document.getElementById("aiGroupRoleInput"),
+  aiRulesInput: document.getElementById("aiRulesInput"),
+  aiRelationshipsInput: document.getElementById("aiRelationshipsInput"),
   aiModelInput: document.getElementById("aiModelInput"),
   aiTemperatureInput: document.getElementById("aiTemperatureInput"),
   aiModal: document.getElementById("aiModal"),
@@ -227,20 +234,76 @@ ui.messageForm.addEventListener("submit", async (event) => {
   ui.messageInput.value = "";
 });
 
+ui.generatePersonalityBtn?.addEventListener("click", async () => {
+  if (!ensureAuth()) return;
+  const name = ui.aiNameInput?.value?.trim() || "";
+  if (!name) {
+    await showDialog({
+      title: "Name required",
+      message: "Enter the AI name first, then click Generate personality.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+    return;
+  }
+  const description = ui.aiDescriptionInput?.value?.trim() || "";
+  if (ui.generatePersonalityBtn) ui.generatePersonalityBtn.disabled = true;
+  try {
+    const data = await api("/api/generate-personality", {
+      method: "POST",
+      body: JSON.stringify({ name, description })
+    });
+    if (data.personality && ui.aiPersonalityInput) ui.aiPersonalityInput.value = data.personality;
+    if (data.textingStyle && ui.aiTextingStyleInput) ui.aiTextingStyleInput.value = data.textingStyle;
+    if (data.groupRole && ui.aiGroupRoleInput) ui.aiGroupRoleInput.value = data.groupRole;
+    if (data.rules && ui.aiRulesInput) ui.aiRulesInput.value = data.rules;
+    if (data.persona && ui.aiPersonaInput) ui.aiPersonaInput.value = data.persona;
+  } catch (error) {
+    await showDialog({
+      title: "Generation failed",
+      message: error?.message || "Could not generate personality. Try again.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+  } finally {
+    if (ui.generatePersonalityBtn) ui.generatePersonalityBtn.disabled = false;
+  }
+});
+
 ui.addAiForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!ensureAuth() || !activeGroupId) return;
 
   const name = ui.aiNameInput.value.trim();
   const persona = ui.aiPersonaInput.value.trim();
+  const personality = ui.aiPersonalityInput?.value?.trim() || "";
+  const textingStyle = ui.aiTextingStyleInput?.value?.trim() || "";
+  const groupRole = ui.aiGroupRoleInput?.value?.trim() || "";
+  const rules = ui.aiRulesInput?.value?.trim() || "";
+  const relationships = ui.aiRelationshipsInput?.value?.trim() || "";
   const model = ui.aiModelInput.value.trim();
   const temperature = Number(ui.aiTemperatureInput.value);
+
+  if (!persona && !personality) {
+    await showDialog({
+      title: "Persona or personality required",
+      message: "Fill in Persona and/or Personality so the AI has a character.",
+      mode: "alert",
+      confirmText: "OK"
+    });
+    return;
+  }
 
   await api(`/api/groups/${encodeURIComponent(activeGroupId)}/ai-members`, {
     method: "POST",
     body: JSON.stringify({
       name,
       persona,
+      personality,
+      textingStyle,
+      groupRole,
+      rules,
+      relationships,
       model,
       temperature
     })
@@ -248,6 +311,11 @@ ui.addAiForm.addEventListener("submit", async (event) => {
 
   ui.aiNameInput.value = "";
   ui.aiPersonaInput.value = "";
+  if (ui.aiPersonalityInput) ui.aiPersonalityInput.value = "";
+  if (ui.aiTextingStyleInput) ui.aiTextingStyleInput.value = "";
+  if (ui.aiGroupRoleInput) ui.aiGroupRoleInput.value = "";
+  if (ui.aiRulesInput) ui.aiRulesInput.value = "";
+  if (ui.aiRelationshipsInput) ui.aiRelationshipsInput.value = "";
   await loadAiMembers(activeGroupId);
   await loadGroups(activeGroupId);
   closeAiModal();
@@ -499,7 +567,7 @@ function appendMessage(message) {
   const row = document.createElement("div");
   row.className = `message ${isMe ? "me" : ""}`;
   const created = new Date(message.createdAt);
-  const time = Number.isNaN(created.getTime()) ? "" : created.toLocaleTimeString();
+  const time = Number.isNaN(created.getTime()) ? "" : created.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   row.innerHTML = `
     ${isMe ? "" : `<div class="message-avatar ${message.senderType === "ai" ? "ai" : ""}">${escapeHtml(initials)}</div>`}
     <div class="message-body">
