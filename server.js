@@ -593,65 +593,66 @@ function shouldAiReply(aiMember, latestMessage, recentMessages) {
   if (!name) return false;
   const text = String(latestMessage?.text || "").toLowerCase();
   const mentioned = new RegExp(`\\b${escapeRegExp(name)}\\b`).test(text);
+  if (mentioned && latestMessage?.senderType === "ai") return true;
   if (mentioned) return Math.random() < 0.98;
   if (latestMessage?.senderType === "ai") return Math.random() < 0.65;
   return Math.random() < 0.75;
 }
 
-function buildCharacterCardPrompt(aiMember, context, latestMessage) {
+function buildCharacterCardPrompt(aiMember, context, latestMessage, recentMessages = []) {
   const name = aiMember.name || "AI";
+  const nameLower = String(name).toLowerCase();
   const hasCard =
     aiMember.personality ||
     aiMember.textingStyle ||
     aiMember.groupRole ||
     aiMember.rules ||
     aiMember.relationships;
+
+  const myRecentMessages = (recentMessages || [])
+    .filter((m) => String(m.senderName || "").toLowerCase() === nameLower && m.senderType === "ai")
+    .slice(-8)
+    .map((m) => m.text)
+    .filter(Boolean);
+
+  const identityBlock = [];
+  identityBlock.push(`You are "${name}" in a private friend group chat.`);
+  identityBlock.push("");
+  if (hasCard) {
+    identityBlock.push("Your character (you must stay exactly like this):");
+    if (aiMember.personality) identityBlock.push(`Personality: ${aiMember.personality}`);
+    if (aiMember.textingStyle) identityBlock.push(`Texting style: ${aiMember.textingStyle}`);
+    if (aiMember.groupRole) identityBlock.push(`Group role: ${aiMember.groupRole}`);
+    if (aiMember.rules) identityBlock.push(`Rules:\n${aiMember.rules}`);
+    if (aiMember.relationships) identityBlock.push(`Relationships: ${aiMember.relationships}`);
+  } else if (aiMember.persona) {
+    identityBlock.push("Your persona (you must stay exactly like this):");
+    identityBlock.push(aiMember.persona);
+  }
+  identityBlock.push("");
+  identityBlock.push("CRITICAL: You are ONLY this character. Every reply must match your personality, style, and rules. Never become generic, helpful, or assistant-like. Stay yourself.");
+
   const parts = [
-    `You are "${name}" in a private friend group chat.`,
+    ...identityBlock,
     "",
-    "You are NOT an AI assistant. You are a normal person in a group chat with friends.",
-    "Do not be overly helpful or explain things. Keep responses short, like real texting.",
-    "When you reply, actually engage—don't leave people hanging mid-conversation. Keep the chat going.",
-    "",
-    "Write like a real person texting friends (e.g. teenager or friend group).",
-    "Use lowercase sometimes. Keep messages short. Use occasional slang. Sometimes send a single word or two.",
-    "Do not sound like an assistant. Do not explain things. Do not be polite like customer support.",
-    "Use emojis rarely if at all; most real texts don't have emojis in every message.",
-    "",
-    "Good: bro what / no way / wait fr?? / lmao / thats wild / nah / rip",
-    "Bad (avoid): That's interesting! How was your day today? I'd be happy to help! That's a great question!",
-    "",
-    "Rules:",
-    "- Reply naturally and conversationally. Stay in character.",
-    "- Keep to 1-4 sentences unless more is needed.",
-    "- You can agree, disagree, or challenge when it fits.",
-    "- Reply to humans or other AI like a normal group member.",
+    "General texting: lowercase sometimes, short messages, occasional slang. Use emojis rarely. Do not explain things or be polite like customer support.",
     "",
     "Recent conversation:",
     context,
-    "",
-    `Latest message from ${latestMessage.senderName}: ${latestMessage.text}`,
-    "",
-    "Return only your next reply as plain text, nothing else."
+    ""
   ];
 
-  if (hasCard) {
-    const card = [];
-    if (aiMember.personality) card.push(`Personality: ${aiMember.personality}`);
-    if (aiMember.textingStyle) card.push(`Texting style: ${aiMember.textingStyle}`);
-    if (aiMember.groupRole) card.push(`Group role: ${aiMember.groupRole}`);
-    if (aiMember.rules) card.push(`Your rules:\n${aiMember.rules}`);
-    if (aiMember.relationships) card.push(`Your relationships / how you act with others: ${aiMember.relationships}`);
-    parts.splice(
-      2,
-      0,
-      "Character card:",
-      card.join("\n"),
+  if (myRecentMessages.length) {
+    parts.splice(identityBlock.length + 2, 0,
+      "Your recent messages in this chat (match this style and voice):",
+      myRecentMessages.map((t) => `You: ${t}`).join("\n"),
       ""
     );
-  } else if (aiMember.persona) {
-    parts.splice(2, 0, "Persona:", aiMember.persona, "");
   }
+
+  parts.push(`Latest message from ${latestMessage.senderName}: ${latestMessage.text}`);
+  parts.push("");
+  parts.push(`Reply as ${name} would. Stay in character. Return only your next reply as plain text, nothing else.`);
 
   return parts.join("\n");
 }
@@ -724,7 +725,7 @@ async function triggerAiReplies(groupId, latestMessage, options = {}) {
   let lastAiMessage = null;
   await Promise.all(
     activeResponders.map(async (aiMember) => {
-      const prompt = buildCharacterCardPrompt(aiMember, context, latestMessage);
+      const prompt = buildCharacterCardPrompt(aiMember, context, latestMessage, recentMessages);
 
       const reply = await requestOpenRouterCompletion({
         model: aiMember.model,
@@ -852,9 +853,10 @@ async function selectRespondingAiMembers({
     "Return JSON only, with format: {\"responders\":[\"Name1\",\"Name2\"]}",
     "Rules:",
     "- When a human sends a message, almost always include at least one responder. Do not leave them without a reply—keep the conversation going.",
+    "- When an AI sends a message that directly addresses another AI by name, or asks a question / tries to continue the conversation, include that addressed AI or at least one other AI who would respond. Do not leave an AI hanging when they're talking to someone.",
     "- When the message is a question, joke, story, or needs a reaction, include at least one responder. When in doubt, include 1 responder.",
     "- Include anyone who would naturally react (laugh, agree, disagree, or have something to add).",
-    "- If a specific AI is directly addressed by name, include that AI.",
+    "- If a specific AI is directly addressed by name, always include that AI.",
     "- If the latest sender is AI and the message contains a claim/question/opinion/disagreement, select at least one OTHER AI responder.",
     "- Return an empty array only when the message is truly one that no one would respond to (e.g. a typo correction, very minor aside).",
     "- Prefer 1-2 responders. Use names exactly as listed.",
@@ -921,13 +923,14 @@ function getContinuationSignal(latestText, candidates) {
     text.includes(String(ai.name || "").toLowerCase())
   );
   const question = /[?]/.test(text);
+  const asksForInput = /\b(what do you think|your take|thoughts\??|anyone\??|what about you|your thoughts|agree\??|disagree\??)\b/i.test(text);
   const disagreement = /\b(but|however|disagree|wrong|actually|no,|not really|counterpoint)\b/i.test(text);
   const opinionOrClaim = /\b(i think|i believe|in my view|should|must|best|because|therefore)\b/i.test(text);
   const longPoint = text.length > 80;
   const hasReactionHook = /\b(lol|omg|haha|wtf|bruh|damn|wild|crazy|same|fr|right)\b/i.test(text) || /[!.]$/.test(text);
 
-  const strong = mentionsOtherAi || question || disagreement || (opinionOrClaim && longPoint);
-  const medium = opinionOrClaim || longPoint || hasReactionHook;
+  const strong = mentionsOtherAi || question || asksForInput || disagreement || (opinionOrClaim && longPoint);
+  const medium = opinionOrClaim || longPoint || hasReactionHook || asksForInput;
   return { strong, medium };
 }
 
