@@ -593,9 +593,9 @@ function shouldAiReply(aiMember, latestMessage, recentMessages) {
   if (!name) return false;
   const text = String(latestMessage?.text || "").toLowerCase();
   const mentioned = new RegExp(`\\b${escapeRegExp(name)}\\b`).test(text);
-  if (mentioned) return Math.random() < 0.95;
-  if (latestMessage?.senderType === "ai") return Math.random() < 0.45;
-  return Math.random() < 0.55;
+  if (mentioned) return Math.random() < 0.98;
+  if (latestMessage?.senderType === "ai") return Math.random() < 0.65;
+  return Math.random() < 0.75;
 }
 
 function buildCharacterCardPrompt(aiMember, context, latestMessage) {
@@ -610,9 +610,8 @@ function buildCharacterCardPrompt(aiMember, context, latestMessage) {
     `You are "${name}" in a private friend group chat.`,
     "",
     "You are NOT an AI assistant. You are a normal person in a group chat with friends.",
-    "Do not be overly helpful. Do not answer everything.",
-    "Sometimes ignore messages; sometimes change the subject.",
-    "Keep responses short, like real texting.",
+    "Do not be overly helpful or explain things. Keep responses short, like real texting.",
+    "When you reply, actually engage—don't leave people hanging mid-conversation. Keep the chat going.",
     "",
     "Write like a real person texting friends (e.g. teenager or friend group).",
     "Use lowercase sometimes. Keep messages short. Use occasional slang. Sometimes send a single word or two.",
@@ -703,7 +702,7 @@ async function triggerAiReplies(groupId, latestMessage, options = {}) {
   if (!responders.length) {
     if (latestMessage.senderType === "ai") {
       fallbackResponders = chooseFallbackAiResponders(fallbackCandidates, latestMessage.senderName, latestMessage.text);
-    } else if (fallbackCandidates.length && Math.random() < 0.5) {
+    } else if (fallbackCandidates.length && Math.random() < 0.85) {
       const idx = Math.floor(Math.random() * fallbackCandidates.length);
       fallbackResponders = [fallbackCandidates[idx]];
     }
@@ -715,6 +714,10 @@ async function triggerAiReplies(groupId, latestMessage, options = {}) {
   if (activeResponders.length > 2) {
     const shuffled = [...activeResponders].sort(() => Math.random() - 0.5);
     activeResponders = shuffled.slice(0, 2);
+  }
+  if (!activeResponders.length && latestMessage.senderType === "human" && fallbackCandidates.length) {
+    const idx = Math.floor(Math.random() * fallbackCandidates.length);
+    activeResponders = [fallbackCandidates[idx]];
   }
   if (!activeResponders.length) return;
 
@@ -848,12 +851,12 @@ async function selectRespondingAiMembers({
     "You are selecting which chat companions should reply to a new message.",
     "Return JSON only, with format: {\"responders\":[\"Name1\",\"Name2\"]}",
     "Rules:",
-    "- When the message is a question, joke, story, or something that needs a reaction, include at least one responder. When in doubt, include 1 responder so the chat feels active.",
-    "- Include anyone who would naturally react (laugh, be surprised, agree, disagree, or have something to add).",
+    "- When a human sends a message, almost always include at least one responder. Do not leave them without a reply—keep the conversation going.",
+    "- When the message is a question, joke, story, or needs a reaction, include at least one responder. When in doubt, include 1 responder.",
+    "- Include anyone who would naturally react (laugh, agree, disagree, or have something to add).",
     "- If a specific AI is directly addressed by name, include that AI.",
     "- If the latest sender is AI and the message contains a claim/question/opinion/disagreement, select at least one OTHER AI responder.",
-    "- Prefer responders with a different perspective or useful additional context.",
-    "- It is valid to return an empty array only when the message clearly needs no reaction from anyone.",
+    "- Return an empty array only when the message is truly one that no one would respond to (e.g. a typo correction, very minor aside).",
     "- Prefer 1-2 responders. Use names exactly as listed.",
     "",
     `Latest sender type: ${latestSenderType}`,
