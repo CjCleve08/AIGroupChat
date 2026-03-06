@@ -492,6 +492,13 @@ button:disabled {
   text-decoration: underline;
 }
 
+.message-list-loading {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .messages {
   flex: 1;
   min-height: 0;
@@ -806,6 +813,12 @@ body.sidebar-collapsed .left-sidebar .profile-card {
   border-radius: 10px;
   background: rgba(30, 41, 59, 0.55);
   border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.members-list li.members-loading {
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .members-list .name {

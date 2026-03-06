@@ -509,14 +509,27 @@ async function selectGroup(group) {
   }
   renderTypingStatus();
 
+  ui.messageList.innerHTML = "";
+  ui.messageList.classList.add("loading");
+  showMessageListLoading(true);
+
   if (previousGroupId && previousGroupId !== group.id) {
     socket.emit("group:leave-room", previousGroupId);
   }
   socket.emit("group:join-room", group.id);
-  await joinActiveGroupIfNeeded();
-  await loadMessages(group.id);
-  await loadAiMembers(group.id);
-  await loadGroups();
+
+  const switchedGroupId = group.id;
+  await Promise.all([
+    joinActiveGroupIfNeeded(),
+    loadMessages(switchedGroupId),
+    loadAiMembers(switchedGroupId)
+  ]);
+
+  if (activeGroupId === switchedGroupId) {
+    showMessageListLoading(false);
+    ui.messageList.classList.remove("loading");
+  }
+  loadGroups().catch(() => {});
 }
 
 async function joinActiveGroupIfNeeded() {
@@ -544,8 +557,21 @@ async function joinGroupFromInvite(groupId) {
   await loadGroups(groupId);
 }
 
+function showMessageListLoading(show) {
+  if (!ui.messageList) return;
+  const existing = ui.messageList.querySelector(".message-list-loading");
+  if (existing) existing.remove();
+  if (show) {
+    const el = document.createElement("div");
+    el.className = "message-list-loading";
+    el.textContent = "Loading...";
+    ui.messageList.appendChild(el);
+  }
+}
+
 async function loadMessages(groupId) {
   const messages = await api(`/api/groups/${encodeURIComponent(groupId)}/messages`);
+  if (activeGroupId !== groupId) return;
   ui.messageList.innerHTML = "";
   for (const message of messages) appendMessage(message);
 }
@@ -809,7 +835,19 @@ function closeAiModal() {
 }
 
 async function openMembersModal() {
-  const payload = await api(`/api/groups/${encodeURIComponent(activeGroupId)}/participants`);
+  ui.membersModal?.classList.remove("hidden");
+  if (ui.memberList) {
+    ui.memberList.innerHTML = "<li class=\"members-loading\">Loading...</li>";
+  }
+
+  let payload;
+  try {
+    payload = await api(`/api/groups/${encodeURIComponent(activeGroupId)}/participants`);
+  } catch (_err) {
+    if (ui.memberList) ui.memberList.innerHTML = "<li class=\"members-loading\">Could not load members.</li>";
+    return;
+  }
+
   activeGroupOwner = String(payload.ownerName || activeGroupOwner || "");
   activeGroupOwnerId = String(payload.ownerId || activeGroupOwnerId || "");
   const canManageGroup = isGroupOwner();
@@ -860,8 +898,6 @@ async function openMembersModal() {
       ui.memberList.appendChild(li);
     }
   }
-
-  ui.membersModal?.classList.remove("hidden");
 }
 
 function closeMembersModal() {
